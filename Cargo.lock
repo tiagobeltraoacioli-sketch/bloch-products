@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bloch-authenticated-transport-evidence"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-data-governance"
 version = "0.1.0"
 dependencies = [
@@ -326,6 +339,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-remote-cursor-receipt-staging"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-caller-auth",
+ "bloch-local-state-remote-cursor-challenge-store",
+ "bloch-local-state-remote-cursor-control-plane",
+ "bloch-local-state-store",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-remote-cursor-replica-quorum"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-remote-session"
 version = "0.1.0"
 dependencies = [
@@ -353,8 +402,10 @@ dependencies = [
  "bloch-pay-adjustments",
  "bloch-trusted-time",
  "bloch-trusted-time-boundary-store",
+ "bloch-trusted-time-external-anchor",
  "bloch-trusted-time-session",
  "ed25519-dalek",
+ "getrandom",
  "hex",
  "serde",
  "serde_json",

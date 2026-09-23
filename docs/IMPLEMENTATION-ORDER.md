@@ -64,12 +64,17 @@ will follow working implementations and retained evidence.
    single-host monotonic-boundary reference store, bounded cursor ingress and
    threshold caller authorization for exact CAS requests also exist. A durable
    single-host one-time challenge store now upgrades exact authorizations into
-   linear replay-protected CAS capabilities. A canonical external-anchor
-   protocol can authenticate an independently retained monotonic generation and
-   time boundary, but does not provide the TPM/WORM/remote counter itself. A
-   qualified network transport, independent rollback-resistant time root,
-   suspend/resume qualification, replicated remote deployment, operational
-   trust roots, encryption and multi-host HA remain open.
+   linear replay-protected CAS capabilities. Crash-safe receipt signing/import
+   staging and an absolute-time-bounded replica comparison verifier also exist;
+   neither supplies signer custody, consensus or fencing. A canonical
+   external-anchor protocol is now composed into optional Data/Pay startup and
+   can authenticate an independently retained monotonic generation and time
+   boundary, but does not provide the TPM/WORM/remote counter itself. Canonical
+   threshold transport evidence can bind an exact TLS exchange, but a live
+   qualified TLS adapter must still derive those claims. Independent
+   rollback-resistant retention, suspend/resume qualification, replicated
+   remote deployment, operational trust roots, encryption and multi-host HA
+   remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

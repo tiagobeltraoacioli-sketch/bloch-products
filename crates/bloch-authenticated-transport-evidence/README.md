@@ -1,0 +1,19 @@
+# Authenticated transport evidence
+
+This crate verifies canonical threshold-Ed25519 evidence for one exact TLS
+exchange. The independently pinned policy fixes the service and state audience,
+purpose, DNS endpoint and port, TLS 1.3, ALPN, allowed cipher suites, server
+SPKI pins, client SPKI identity, response limit, round-trip limit and attestor
+threshold. Evidence binds the exact request nonce plus request/response digests
+and is evaluated with `VerifiedTrustedTime`, never an operator wall clock.
+
+The returned capability is opaque, non-cloneable and expires on a monotonic
+deadline bounded by the evidence age, policy expiry and trusted-time expiry.
+
+This is not a TLS implementation and does not inspect a live socket. It proves
+only that the configured attestor keys signed the canonical claims. Production
+still requires a qualified TLS 1.3/mTLS adapter which derives every field from
+the actual handshake and exact transported bytes, protects attestor keys,
+prevents nonce reuse, and demonstrates organizational independence and target
+host behavior. DNS security, certificate issuance/revocation, network routing,
+availability and server operation remain external gates.

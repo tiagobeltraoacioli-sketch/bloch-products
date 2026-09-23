@@ -30,12 +30,18 @@ use bloch_local_state_runtime::*;
 use bloch_local_state_store::write_state;
 use bloch_pay_adjustments::{ADJUSTMENT_STATE_SCHEMA, AdjustmentStatus};
 use bloch_trusted_time::{
-    TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
-    VerifiedTrustedTime, create_trusted_time_token, trusted_time_policy_bytes,
-    trusted_time_policy_sha256, trusted_time_signature_message, verify_trusted_time_token,
+    TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimeBoundary, TrustedTimePolicy,
+    TrustedTimeSignature, VerifiedTrustedTime, create_trusted_time_token,
+    trusted_time_policy_bytes, trusted_time_policy_sha256, trusted_time_signature_message,
+    verify_trusted_time_token,
 };
 use bloch_trusted_time_boundary_store::{
     TrustedTimeBoundaryAudience, load_trusted_time_boundary, provision_trusted_time_boundary_store,
+};
+use bloch_trusted_time_external_anchor::{
+    EXTERNAL_ANCHOR_POLICY_SCHEMA, ExternalAnchorAuthority, ExternalAnchorPolicy,
+    ExternalAnchorSignature, create_external_anchor_document, external_anchor_policy_bytes,
+    external_anchor_policy_sha256, external_anchor_signature_message, verify_external_anchor,
 };
 use bloch_trusted_time_session::MonotonicDeadlineRead;
 use ed25519_dalek::{Signer, SigningKey};
@@ -53,6 +59,107 @@ struct Temp(PathBuf);
 struct TokenReader {
     bytes: Vec<u8>,
     offset: usize,
+}
+
+struct AnchorFixture {
+    policy: ExternalAnchorPolicy,
+    policy_bytes: Vec<u8>,
+    pin: String,
+    keys: [SigningKey; 2],
+    expectation: Vec<u8>,
+}
+
+impl AnchorFixture {
+    fn new(
+        state_identity: &str,
+        time_policy: &TrustedTimePolicy,
+        time_pin: &str,
+        time_keys: &[SigningKey; 2],
+        remote_pin: &str,
+        at: u64,
+    ) -> Self {
+        let keys = [
+            SigningKey::from_bytes(&[121; 32]),
+            SigningKey::from_bytes(&[122; 32]),
+        ];
+        let policy = ExternalAnchorPolicy {
+            schema: EXTERNAL_ANCHOR_POLICY_SCHEMA.into(),
+            policy_id: "runtime-external-anchor".into(),
+            signature_domain: "bloch-products-runtime-external-anchor".into(),
+            state_identity: state_identity.into(),
+            trusted_time_policy_sha256: time_pin.into(),
+            remote_cursor_policy_sha256: remote_pin.into(),
+            threshold: 2,
+            effective_at_unix_seconds: at - 60,
+            expires_at_unix_seconds: at + 60,
+            max_anchor_lifetime_seconds: 30,
+            authorities: keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| ExternalAnchorAuthority {
+                    authority_id: format!("anchor-{}", index + 1),
+                    ed25519_public_key: format!(
+                        "0x{}",
+                        hex::encode(key.verifying_key().as_bytes())
+                    ),
+                })
+                .collect(),
+        };
+        let pin = external_anchor_policy_sha256(&policy).unwrap();
+        let retained_boundary = boundary_at(time_policy, time_pin, time_keys, at - 2);
+        let retained_time = verified_time_at(time_policy, time_pin, time_keys, at);
+        let document = anchor_document(
+            &policy,
+            &pin,
+            &keys,
+            1,
+            &retained_boundary,
+            "0x1111111111111111111111111111111111111111111111111111111111111111",
+            at - 1,
+            at + 20,
+        );
+        let expectation = verify_external_anchor(
+            &document,
+            &policy,
+            &pin,
+            "0x1111111111111111111111111111111111111111111111111111111111111111",
+            &retained_time,
+            None,
+        )
+        .unwrap()
+        .retention_expectation()
+        .canonical_bytes()
+        .unwrap();
+        let policy_bytes = external_anchor_policy_bytes(&policy).unwrap();
+        Self {
+            policy,
+            policy_bytes,
+            pin,
+            keys,
+            expectation,
+        }
+    }
+
+    fn response(
+        &self,
+        nonce: &str,
+        boundary: &TrustedTimeBoundary,
+        at: u64,
+    ) -> ExternalAnchorFetchResponse {
+        ExternalAnchorFetchResponse {
+            document_bytes: anchor_document(
+                &self.policy,
+                &self.pin,
+                &self.keys,
+                2,
+                boundary,
+                nonce,
+                at,
+                at + 20,
+            ),
+            authenticated_expectation_bytes: self.expectation.clone(),
+        }
+    }
 }
 
 impl MonotonicDeadlineRead for TokenReader {
@@ -524,6 +631,272 @@ fn fresh_time_acquisition_advances_boundary_before_pay_admission() {
 }
 
 #[test]
+fn external_anchor_is_verified_before_local_advance_and_cursor_fetch() {
+    let fixture = pay_fixture();
+    let boundary_store = Temp::new("anchored-time-boundary");
+    let (time_policy, time_pin, time_keys) =
+        trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+    let at = now();
+    let initial = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: &time_pin,
+        state_identity: &fixture.identity,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+    };
+    provision_trusted_time_boundary_store(&boundary_store.0, audience, &initial).unwrap();
+    let time_policy_bytes = trusted_time_policy_bytes(&time_policy).unwrap();
+    let anchor = AnchorFixture::new(
+        &fixture.identity,
+        &time_policy,
+        &time_pin,
+        &time_keys,
+        &fixture.remote_pin,
+        at,
+    );
+    let anchor_boundary = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let stage = Cell::new(0);
+
+    let admitted = start_pay_with_fresh_trusted_time_and_external_anchor(
+        PayStartupMaterials {
+            remote: fixture.remote(Duration::from_secs(1)),
+            local: fixture.local(),
+        },
+        TrustedTimeStartupMaterials {
+            policy_bytes: &time_policy_bytes,
+            expected_policy_sha256: &time_pin,
+            boundary_store: &boundary_store.0,
+            timeout: Duration::from_secs(1),
+        },
+        ExternalAnchorStartupMaterials {
+            policy_bytes: &anchor.policy_bytes,
+            expected_policy_sha256: &anchor.pin,
+            timeout: Duration::from_secs(1),
+        },
+        |request| {
+            Ok::<_, std::io::Error>(TokenReader {
+                bytes: trusted_time_token(
+                    &time_policy,
+                    &time_pin,
+                    &time_keys,
+                    request.request_nonce(),
+                    at,
+                ),
+                offset: 0,
+            })
+        },
+        |request| {
+            assert_eq!(stage.get(), 0);
+            assert_eq!(
+                load_trusted_time_boundary(&boundary_store.0, audience)
+                    .unwrap()
+                    .not_before_unix_seconds(),
+                at - 1
+            );
+            stage.set(1);
+            Ok::<_, std::io::Error>(anchor.response(request.request_nonce(), &anchor_boundary, at))
+        },
+        |request| {
+            assert_eq!(stage.get(), 1);
+            assert_eq!(
+                load_trusted_time_boundary(&boundary_store.0, audience)
+                    .unwrap()
+                    .not_before_unix_seconds(),
+                at + 30
+            );
+            stage.set(2);
+            Ok::<_, std::io::Error>(fixture.response_at(request.request_nonce(), at))
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.state().adjustment_id(), "adjustment-1");
+    assert_eq!(stage.get(), 2);
+}
+
+#[test]
+fn external_anchor_rollback_does_not_advance_local_boundary_or_fetch_cursor() {
+    let fixture = pay_fixture();
+    let boundary_store = Temp::new("rollback-anchor-boundary");
+    let (time_policy, time_pin, time_keys) =
+        trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+    let at = now();
+    let initial = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: &time_pin,
+        state_identity: &fixture.identity,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+    };
+    provision_trusted_time_boundary_store(&boundary_store.0, audience, &initial).unwrap();
+    let time_policy_bytes = trusted_time_policy_bytes(&time_policy).unwrap();
+    let anchor = AnchorFixture::new(
+        &fixture.identity,
+        &time_policy,
+        &time_pin,
+        &time_keys,
+        &fixture.remote_pin,
+        at,
+    );
+    let future_boundary = boundary_at(&time_policy, &time_pin, &time_keys, at + 1);
+    let cursor_called = Cell::new(false);
+
+    let result = start_pay_with_fresh_trusted_time_and_external_anchor(
+        PayStartupMaterials {
+            remote: fixture.remote(Duration::from_secs(1)),
+            local: fixture.local(),
+        },
+        TrustedTimeStartupMaterials {
+            policy_bytes: &time_policy_bytes,
+            expected_policy_sha256: &time_pin,
+            boundary_store: &boundary_store.0,
+            timeout: Duration::from_secs(1),
+        },
+        ExternalAnchorStartupMaterials {
+            policy_bytes: &anchor.policy_bytes,
+            expected_policy_sha256: &anchor.pin,
+            timeout: Duration::from_secs(1),
+        },
+        |request| {
+            Ok::<_, std::io::Error>(TokenReader {
+                bytes: trusted_time_token(
+                    &time_policy,
+                    &time_pin,
+                    &time_keys,
+                    request.request_nonce(),
+                    at,
+                ),
+                offset: 0,
+            })
+        },
+        |request| {
+            Ok::<_, std::io::Error>(anchor.response(request.request_nonce(), &future_boundary, at))
+        },
+        |_request| {
+            cursor_called.set(true);
+            Ok::<_, std::io::Error>(Vec::new())
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(AnchoredFreshStartupRuntimeError::ExternalAnchorVerification(_))
+    ));
+    assert!(!cursor_called.get());
+    assert_eq!(
+        load_trusted_time_boundary(&boundary_store.0, audience)
+            .unwrap()
+            .not_before_unix_seconds(),
+        at - 1
+    );
+}
+
+#[test]
+fn external_anchor_transport_and_cross_audience_fail_before_local_mutation() {
+    for mode in ["transport", "cross-audience", "cross-policy"] {
+        let cross_audience = mode == "cross-audience";
+        let fixture = pay_fixture();
+        let boundary_store = Temp::new("failed-anchor-boundary");
+        let (time_policy, time_pin, time_keys) =
+            trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+        let at = now();
+        let initial = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+        let audience = TrustedTimeBoundaryAudience {
+            trusted_time_policy_sha256: &time_pin,
+            state_identity: &fixture.identity,
+            remote_cursor_policy_sha256: &fixture.remote_pin,
+        };
+        provision_trusted_time_boundary_store(&boundary_store.0, audience, &initial).unwrap();
+        let time_policy_bytes = trusted_time_policy_bytes(&time_policy).unwrap();
+        let other_identity = "pay:other-merchant:adjustment-1";
+        let (other_time_policy, other_time_pin, other_time_keys) =
+            trusted_time_policy(other_identity, &fixture.remote_pin);
+        let (anchor_time_policy, anchor_time_pin, anchor_time_keys) = if cross_audience {
+            (&other_time_policy, &other_time_pin, &other_time_keys)
+        } else {
+            (&time_policy, &time_pin, &time_keys)
+        };
+        let anchor = AnchorFixture::new(
+            if cross_audience {
+                other_identity
+            } else {
+                &fixture.identity
+            },
+            anchor_time_policy,
+            anchor_time_pin,
+            anchor_time_keys,
+            &fixture.remote_pin,
+            at,
+        );
+        let anchor_boundary = boundary_at(
+            anchor_time_policy,
+            anchor_time_pin,
+            anchor_time_keys,
+            at - 1,
+        );
+        let cursor_called = Cell::new(false);
+        let result = start_pay_with_fresh_trusted_time_and_external_anchor(
+            PayStartupMaterials {
+                remote: fixture.remote(Duration::from_secs(1)),
+                local: fixture.local(),
+            },
+            TrustedTimeStartupMaterials {
+                policy_bytes: &time_policy_bytes,
+                expected_policy_sha256: &time_pin,
+                boundary_store: &boundary_store.0,
+                timeout: Duration::from_secs(1),
+            },
+            ExternalAnchorStartupMaterials {
+                policy_bytes: &anchor.policy_bytes,
+                expected_policy_sha256: if mode == "cross-policy" {
+                    "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                } else {
+                    &anchor.pin
+                },
+                timeout: Duration::from_secs(1),
+            },
+            |request| {
+                Ok::<_, std::io::Error>(TokenReader {
+                    bytes: trusted_time_token(
+                        &time_policy,
+                        &time_pin,
+                        &time_keys,
+                        request.request_nonce(),
+                        at,
+                    ),
+                    offset: 0,
+                })
+            },
+            |request| {
+                if cross_audience {
+                    Ok(anchor.response(request.request_nonce(), &anchor_boundary, at))
+                } else {
+                    Err(std::io::Error::other("anchor unavailable"))
+                }
+            },
+            |_request| {
+                cursor_called.set(true);
+                Ok::<_, std::io::Error>(Vec::new())
+            },
+        );
+        if mode == "transport" {
+            assert!(matches!(
+                result,
+                Err(AnchoredFreshStartupRuntimeError::ExternalAnchorTransport(_))
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(AnchoredFreshStartupRuntimeError::ExternalAnchorVerification(_))
+            ));
+        }
+        assert!(!cursor_called.get());
+        assert_eq!(
+            load_trusted_time_boundary(&boundary_store.0, audience)
+                .unwrap()
+                .not_before_unix_seconds(),
+            at - 1
+        );
+    }
+}
+
+#[test]
 fn timeout_replay_and_cross_identity_fail_closed() {
     let fixture = pay_fixture();
     let timeout = start_pay(
@@ -740,6 +1113,70 @@ fn trusted_time(
         verify_trusted_time_token(&token, &policy, &pin, nonce, None).unwrap(),
         pin,
     )
+}
+
+fn verified_time_at(
+    policy: &TrustedTimePolicy,
+    pin: &str,
+    keys: &[SigningKey; 2],
+    at: u64,
+) -> VerifiedTrustedTime {
+    let nonce = "runtime_anchor_time_nonce_0123456789abcdef0123456789abcdef";
+    verify_trusted_time_token(
+        &trusted_time_token(policy, pin, keys, nonce, at),
+        policy,
+        pin,
+        nonce,
+        None,
+    )
+    .unwrap()
+}
+
+fn boundary_at(
+    policy: &TrustedTimePolicy,
+    pin: &str,
+    keys: &[SigningKey; 2],
+    floor: u64,
+) -> TrustedTimeBoundary {
+    verified_time_at(policy, pin, keys, floor - 30)
+        .rollback_boundary()
+        .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn anchor_document(
+    policy: &ExternalAnchorPolicy,
+    pin: &str,
+    keys: &[SigningKey; 2],
+    generation: u64,
+    boundary: &TrustedTimeBoundary,
+    nonce: &str,
+    issued_at: u64,
+    expires_at: u64,
+) -> Vec<u8> {
+    let message = external_anchor_signature_message(
+        policy, pin, generation, boundary, issued_at, expires_at, nonce,
+    )
+    .unwrap();
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| ExternalAnchorSignature {
+            authority_id: format!("anchor-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    create_external_anchor_document(
+        policy,
+        pin,
+        generation,
+        boundary,
+        issued_at,
+        expires_at,
+        nonce,
+        &signatures,
+    )
+    .unwrap()
 }
 
 fn now() -> u64 {

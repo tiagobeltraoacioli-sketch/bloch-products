@@ -8,10 +8,13 @@ admission, transition/recovery composition, single-host CAS reference core and
 re-bootstrap tools exist as building blocks. Audience-bound threshold trusted
 time, fresh bounded acquisition, a single-host monotonic-boundary reference
 store, an external-anchor verification protocol, bounded cursor ingress and a
-single-host one-time CAS challenge store also exist. A qualified network
-transport, independent rollback-resistant root, replicated remote service,
-authority signing boundary and production systemd composition are not deployed
-or qualified.
+single-host one-time CAS challenge store also exist. Optional runtime startup
+now composes the external anchor before advancing the local time boundary.
+Threshold transport-evidence verification, crash-safe receipt staging and an
+absolute-time replica-quorum comparison also exist as offline building blocks.
+A live qualified transport adapter, independent rollback-resistant root,
+replicated linearizable remote service, authority signing boundary and
+production systemd composition are not deployed or qualified.
 
 The existing `bloch-products-synthetic-store-check@.service` is
 **synthetic-only**. It checks a locally staged root with the generic store
@@ -65,11 +68,14 @@ below. Production qualification must select and test one complete composition
 without reducing nonce, trusted-time or policy provenance to an unauthenticated
 raw cursor.
 
-The runtime's fresh-time entry points load the explicitly provisioned boundary,
-acquire and verify a nonce-bound token, durably advance the boundary, and only
-then authenticate the remote cursor and local state. Creating an empty boundary
-directory through tmpfiles is forbidden because it could blur deletion from
-first provisioning. Every cooperating boundary updater must use the same local
+The runtime's fresh-time entry points load the explicitly provisioned boundary
+and acquire a nonce-bound token. The external-anchor variants then fetch and
+verify the independently retained generation/boundary expectation before
+durably advancing the local boundary, and only then authenticate the remote
+cursor and local state. The callback contract does not itself qualify the
+external channel or retention system. Creating an empty boundary directory
+through tmpfiles is forbidden because it could blur deletion from first
+provisioning. Every cooperating boundary updater must use the same local
 coordination domain.
 
 ### 1. Networked fetch unit
@@ -227,9 +233,9 @@ require a separate authority-approved recovery or re-genesis ceremony.
 
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
-| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition and negative tests exist; qualified transport/systemd integration evidence remains |
-| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition, single-host monotonic store and external-anchor verifier exist; independently operated anti-rollback retention, suspend/resume qualification and host tests remain |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core, durable one-time challenges, trusted-time authorization and concurrency tests exist; replicated challenge/CAS service, external decision signing and operational qualification remain |
+| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition, threshold transport-evidence profile and negative tests exist; live qualified adapter/systemd integration evidence remains |
+| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition, single-host monotonic store and runtime-composed external-anchor verification exist; independently operated anti-rollback retention/channel, suspend/resume qualification and host tests remain |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host core, durable one-time challenges, trusted-time authorization, crash-safe receipt staging and time-bounded replica comparison exist; replicated consensus/fencing service, external signer operation and qualification remain |
 | P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
 | P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed, has no install relationship and CI rejects production-target dependencies/aliases; target-host composition evidence remains |
 | P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations and non-installable checked Data/Pay unit specifications exist; target-host UID, unit and ownership evidence remains |

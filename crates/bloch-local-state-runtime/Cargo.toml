@@ -11,7 +11,10 @@ bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" 
 bloch-local-state-remote-session = { path = "../bloch-local-state-remote-session" }
 bloch-trusted-time = { path = "../bloch-trusted-time" }
 bloch-trusted-time-boundary-store = { path = "../bloch-trusted-time-boundary-store" }
+bloch-trusted-time-external-anchor = { path = "../bloch-trusted-time-external-anchor" }
 bloch-trusted-time-session = { path = "../bloch-trusted-time-session" }
+getrandom = "0.2.17"
+hex.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -131,9 +131,14 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-trusted-time-external-anchor`: canonical threshold-authenticated
   external generation/boundary proof checked with trusted time. TPM, WORM or a
   remote monotonic counter and its independent retention remain external.
+- `bloch-authenticated-transport-evidence`: canonical threshold-attested
+  evidence for one exact TLS 1.3/mTLS exchange, including endpoint, handshake
+  pins, nonce and request/response digests. It verifies claims but does not
+  open or inspect a live TLS connection.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
-  the one-shot remote session to coordinated checkpoint, cursor, store and
-  semantic admission without materializing a raw cursor or nonce file.
+  fresh trusted time and an optional independently retained external anchor to
+  the one-shot remote session and coordinated semantic admission, without
+  materializing a raw cursor or nonce file.
 - `bloch-local-state-remote-cursor-control-plane`: Unix reference core for
   explicitly provisioned, durable, idempotent and serialized cursor CAS. It
   requires an exact replay-protected threshold caller-authorization capability, returns
@@ -146,6 +151,13 @@ identity, prove finality, activate a network, or authorize asset movement.
   authorization for the exact bytes of one CAS request, verified with
   audience-bound trusted time and upgraded only after its challenge is durably
   consumed.
+- `bloch-local-state-remote-cursor-receipt-staging`: crash-safe create-once
+  signing material and signed-receipt import for exact CAS decisions. Private
+  keys and external signer operation remain outside the process.
+- `bloch-local-state-remote-cursor-replica-quorum`: offline comparison of
+  independently authenticated replica observations, with absolute trusted-time
+  freshness and split-brain rejection. It is evidence analysis, not consensus,
+  fencing or a replicated service.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.

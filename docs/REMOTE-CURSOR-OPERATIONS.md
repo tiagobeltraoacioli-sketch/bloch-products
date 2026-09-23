@@ -66,13 +66,18 @@ evidence proves the remote CAS did not accept the candidate.
 
 The repository now defines authenticated cursor observation, canonical signed
 CAS requests and receipts, and an explicitly provisioned durable single-host
-reference CAS core. The core now requires an exact threshold caller
-authorization verified with audience-bound trusted time and upgraded only after
-an explicitly provisioned single-host store durably consumes its exact fresh
-challenge. Challenge transport, snapshot-resistant replay tracking and a
-replicated challenge service remain external. It returns unsigned decision material and
-is not a network service, signing authority or replicated linearizable service.
-Therefore this sequence remains an
+reference CAS core. The core requires exact threshold caller authorization
+verified with audience-bound trusted time and upgraded only after an explicitly
+provisioned single-host store durably consumes its exact fresh challenge.
+Crash-safe create-once staging can preserve exact decision signing material and
+import a matching threshold receipt without taking private keys. An offline
+quorum verifier can compare distinct authenticated replica observations using
+absolute trusted-time freshness and reject split-brain evidence. It does not
+establish replica independence, run consensus or fence writers. Challenge
+transport, snapshot-resistant replay tracking, external signer custody and a
+replicated linearizable challenge/CAS service remain external. The reference
+core returns unsigned decision material and is not a network service or signing
+authority. Therefore this sequence remains an
 implementation contract, not deployment evidence, and production activation
 is blocked. Even a valid signed acceptance receipt must be followed by a fresh
 authenticated cursor observation matching the exact successor.

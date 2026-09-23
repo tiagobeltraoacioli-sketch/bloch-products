@@ -29,6 +29,26 @@ exclusive terminal instant, closing a crash window at the cost of requiring a
 later token to reach that instant. The reference filesystem store still cannot
 detect host, mount, volume or VM snapshot rollback.
 
+`start_data_with_fresh_trusted_time_and_external_anchor` and
+`start_pay_with_fresh_trusted_time_and_external_anchor` add an independently
+pinned external anti-rollback gate. Under the same coordination lock they load
+the local boundary, acquire fresh trusted time, generate a fresh anchor nonce,
+receive the signed anchor document and the prior expectation over a
+caller-authenticated external channel, verify the exact policy and Data/Pay
+audience, require the token to have reached the external floor, and only then
+advance the local boundary, fetch the remote cursor and admit state. Anchor
+transport, verification, deadline, trusted-time, boundary, cursor and admission
+failures have distinct error variants.
+
+The runtime never writes the external expectation to the local boundary store
+and does not treat local persistence as independent evidence. The callback is
+contractually responsible for authenticating the source of
+`authenticated_expectation_bytes`; those canonical bytes are bounded and
+parsed again against independently configured pins. The callback must also
+honor the supplied monotonic deadline. This crate provides no network client,
+TPM/WORM/remote-counter implementation, authenticated channel, independent
+retention, or anchor authority operations.
+
 The opaque verified remote cursor never leaves this composition. The crate has
 no CLI, filesystem input loader, network client, cache, nonce persistence or
 private-key API. The caller-provided transport must enforce the monotonic
