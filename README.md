@@ -60,6 +60,12 @@ identity, prove finality, activate a network, or authorize asset movement.
   purpose, field-classification, jurisdiction, region, retention and release
   policy. Protected values remain off-chain; v1 can authorize only a bounded
   externally constructed hiding commitment for publication.
+- The Bloch Data JSON ingestion boundary derives the top-level field inventory
+  from bounded bytes, rejects duplicate keys recursively and emits canonical
+  record bytes with a bound digest instead of trusting caller-declared fields.
+- `bloch-pay-reconciliation`: pinned payment routes and observation sources,
+  canonical invoices, deterministic exact/partial/excess/late matching and
+  explicit non-settlement reports that can never authorize credit or funds.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.
@@ -136,6 +142,8 @@ documented in
 [`docs/BLOCH-DATA-REGULATED-DATA.md`](docs/BLOCH-DATA-REGULATED-DATA.md),
 [`docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md`](docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md)
 and [`docs/BLOCH-DATA-THREAT-MODEL.md`](docs/BLOCH-DATA-THREAT-MODEL.md).
+The non-custodial Bloch Pay reconciliation boundary is documented in
+[`docs/BLOCH-PAY-RECONCILIATION.md`](docs/BLOCH-PAY-RECONCILIATION.md).
 
 ## Product boundaries
 

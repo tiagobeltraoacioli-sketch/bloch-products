@@ -31,7 +31,11 @@ will follow working implementations and retained evidence.
    network adapters, tenant-isolated encrypted storage, actual KMS/HSM and
    commitment implementations, privacy lifecycle execution, independently
    operated WORM replicas and distributed database/HA operation remain open.
-6. Non-custodial treasury policy evaluation and payment reconciliation.
+6. Non-custodial payment reconciliation — deterministic invoice/observation
+   matching with pinned routes and permanently false settlement/credit claims is
+   implemented. Authenticated observations, qualified finality, durable
+   allocation, policy-wallet execution, bank/Pix integration and credit policy
+   remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

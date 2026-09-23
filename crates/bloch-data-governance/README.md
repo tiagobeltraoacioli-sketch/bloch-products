@@ -26,6 +26,15 @@ artifact rule, construction ID, domain and complete hidden-source inventory.
 Unknown fields, extra recipients, cross-tenant requests, expired approvals,
 unapproved regions and legal-hold deletion all fail closed.
 
+`authorize_json_ingestion` closes the caller-declared field-inventory gap for a
+bounded JSON record: it rejects duplicate keys at every depth, requires a
+top-level object, derives the sorted top-level fields from the exact bytes and
+emits deterministic canonical JSON whose SHA-256 is bound to the authorization.
+Equivalent object-key ordering therefore cannot create a second record
+identity. It validates field presence, not nested business types or semantic
+truth; a pinned dataset-schema decoder is still required before production
+persistence.
+
 The policy's `constructionId` is an allowlist binding, not cryptographic proof.
 The operator must separately qualify and enforce a randomized, hiding
 commitment implementation; a plain deterministic hash of PII or financial data

@@ -10,6 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 
+mod record;
+pub use record::{
+    AuthorizedJsonIngestion, JsonIngestionContext, JsonIngestionError, MAX_JSON_RECORD_BYTES,
+    authorize_json_ingestion,
+};
+
 pub const GOVERNANCE_POLICY_SCHEMA: &str = "bloch.data.governance-policy.v1";
 pub const DECISION_REPORT_SCHEMA: &str = "bloch.data.governance-decision.v1";
 pub const ONCHAIN_COMMITMENT_SCHEMA: &str = "bloch.data.minimized-commitment.v1";
@@ -719,7 +725,7 @@ fn is_sorted_unique<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|window| window[0] < window[1])
 }
 
-fn valid_identifier(value: &str) -> bool {
+pub(crate) fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_IDENTIFIER_BYTES
         && value.bytes().all(|byte| {
@@ -787,7 +793,7 @@ fn commitment_authorization_context_sha256(
     format!("0x{}", hex::encode(digest.finalize()))
 }
 
-fn reject_duplicate_keys(bytes: &[u8]) -> Result<(), GovernanceError> {
+pub(crate) fn reject_duplicate_keys(bytes: &[u8]) -> Result<(), GovernanceError> {
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     DuplicateCheckedValue::deserialize(&mut decoder)
         .map_err(|error| GovernanceError::InvalidJson(error.to_string()))?;
