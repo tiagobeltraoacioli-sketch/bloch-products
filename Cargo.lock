@@ -193,11 +193,14 @@ version = "0.1.0"
 dependencies = [
  "bloch-data-governance",
  "bloch-local-state-checkpoint",
+ "bloch-local-state-coordination",
  "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
  "bloch-local-state-store",
  "bloch-pay-adjustments",
  "ed25519-dalek",
  "hex",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -219,10 +222,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-coordination"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-cursor"
 version = "0.1.0"
 dependencies = [
  "bloch-local-state-checkpoint",
+ "bloch-local-state-store",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-rebootstrap"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-checkpoint",
+ "bloch-local-state-cursor",
+ "bloch-local-state-store",
+ "ed25519-dalek",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-remote-cursor"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
  "bloch-local-state-store",
  "ed25519-dalek",
  "getrandom",

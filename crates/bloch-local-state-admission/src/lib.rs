@@ -1,8 +1,8 @@
 //! Read-only startup admission for persisted Bloch Data and Bloch Pay state.
 //!
-//! This composes independent checkpoint, cursor and semantic expectations. It
-//! does not serialize admission with a concurrent writer; production callers
-//! must provide an outer lock shared with every state/cursor writer.
+//! This composes independent checkpoint, cursor and semantic expectations.
+//! The base APIs are uncoordinated; production callers use the coordinated
+//! wrappers and require every local state/cursor writer to share their lock.
 
 use bloch_data_governance::{
     LifecycleError, LifecyclePolicy, LifecycleState, LifecycleStateExpectation,
@@ -11,7 +11,9 @@ use bloch_data_governance::{
 use bloch_local_state_checkpoint::{
     CheckpointError, authenticate_retained_root_checkpoint, parse_checkpoint_policy,
 };
-use bloch_local_state_cursor::{CheckpointCursor, CursorError, verify_admitted_checkpoint};
+use bloch_local_state_coordination::{CoordinatedError, with_coordinated_startup_admission};
+use bloch_local_state_cursor::{CursorError, verify_admitted_checkpoint};
+use bloch_local_state_remote_cursor::VerifiedRemoteCursor;
 use bloch_local_state_store::{StoreError, load_state};
 use bloch_pay_adjustments::{
     AdjustmentError, AdjustmentState, AdjustmentStateExpectation, restore_adjustment_state,
@@ -56,10 +58,8 @@ pub struct PayAdjustmentSemanticManifest {
 pub struct StartupAdmission<'a> {
     pub artifact_bytes: &'a [u8],
     pub checkpoint_policy_bytes: &'a [u8],
-    pub expected_checkpoint_policy_sha256: &'a str,
     pub semantic_manifest_bytes: &'a [u8],
-    pub expected_semantic_manifest_sha256: &'a str,
-    pub expected_cursor: &'a CheckpointCursor,
+    pub verified_remote_cursor: &'a VerifiedRemoteCursor,
     pub cursor_store: &'a Path,
     pub state_store: &'a Path,
 }
@@ -81,6 +81,9 @@ pub struct AdmissionEvidence {
     checkpoint_sha256: String,
     checkpoint_policy_sha256: String,
     semantic_manifest_sha256: String,
+    remote_cursor_policy_sha256: String,
+    remote_cursor_observation_sha256: String,
+    remote_cursor_observed_at_unix_seconds: u64,
 }
 
 impl AdmissionEvidence {
@@ -101,6 +104,15 @@ impl AdmissionEvidence {
     }
     pub fn semantic_manifest_sha256(&self) -> &str {
         &self.semantic_manifest_sha256
+    }
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        &self.remote_cursor_policy_sha256
+    }
+    pub fn remote_cursor_observation_sha256(&self) -> &str {
+        &self.remote_cursor_observation_sha256
+    }
+    pub fn remote_cursor_observed_at_unix_seconds(&self) -> u64 {
+        self.remote_cursor_observed_at_unix_seconds
     }
     pub fn concurrent_writer_excluded(&self) -> bool {
         false
@@ -207,7 +219,11 @@ pub fn admit_data_lifecycle(
 ) -> Result<AdmittedLifecycleState, AdmissionError> {
     let manifest = parse_data_semantic_manifest(
         admission.startup.semantic_manifest_bytes,
-        admission.startup.expected_semantic_manifest_sha256,
+        admission
+            .startup
+            .verified_remote_cursor
+            .cursor()
+            .semantic_manifest_sha256(),
     )?;
     let policy: LifecyclePolicy = parse_lifecycle_policy(
         admission.lifecycle_policy_bytes,
@@ -236,8 +252,17 @@ pub fn admit_data_lifecycle(
     recheck(&admission.startup, &verified, &bytes)?;
     Ok(AdmittedLifecycleState {
         state,
-        evidence: evidence(&verified),
+        evidence: evidence(&verified, admission.startup.verified_remote_cursor),
     })
+}
+
+/// Performs complete Data startup admission while holding the shared
+/// single-host coordination lock used by every cooperating local writer.
+pub fn admit_data_lifecycle_coordinated(
+    coordination_directory: &Path,
+    admission: DataLifecycleAdmission<'_>,
+) -> Result<AdmittedLifecycleState, CoordinatedError<AdmissionError>> {
+    with_coordinated_startup_admission(coordination_directory, |_| admit_data_lifecycle(admission))
 }
 
 pub fn admit_pay_adjustment(
@@ -245,7 +270,11 @@ pub fn admit_pay_adjustment(
 ) -> Result<AdmittedAdjustmentState, AdmissionError> {
     let manifest = parse_pay_semantic_manifest(
         admission.startup.semantic_manifest_bytes,
-        admission.startup.expected_semantic_manifest_sha256,
+        admission
+            .startup
+            .verified_remote_cursor
+            .cursor()
+            .semantic_manifest_sha256(),
     )?;
     let (verified, bytes) = authenticate_and_load(&admission.startup)?;
     if manifest.state_identity != verified.root().state_identity()
@@ -270,8 +299,17 @@ pub fn admit_pay_adjustment(
     recheck(&admission.startup, &verified, &bytes)?;
     Ok(AdmittedAdjustmentState {
         state,
-        evidence: evidence(&verified),
+        evidence: evidence(&verified, admission.startup.verified_remote_cursor),
     })
+}
+
+/// Performs complete Pay startup admission while holding the shared
+/// single-host coordination lock used by every cooperating local writer.
+pub fn admit_pay_adjustment_coordinated(
+    coordination_directory: &Path,
+    admission: PayAdjustmentAdmission<'_>,
+) -> Result<AdmittedAdjustmentState, CoordinatedError<AdmissionError>> {
+    with_coordinated_startup_admission(coordination_directory, |_| admit_pay_adjustment(admission))
 }
 
 fn authenticate_and_load(
@@ -285,20 +323,35 @@ fn authenticate_and_load(
 > {
     let policy = parse_checkpoint_policy(
         startup.checkpoint_policy_bytes,
-        startup.expected_checkpoint_policy_sha256,
+        startup
+            .verified_remote_cursor
+            .cursor()
+            .checkpoint_policy_sha256(),
     )
     .map_err(AdmissionError::Checkpoint)?;
     let verified = authenticate_retained_root_checkpoint(
         startup.artifact_bytes,
         &policy,
-        startup.expected_checkpoint_policy_sha256,
+        startup
+            .verified_remote_cursor
+            .cursor()
+            .checkpoint_policy_sha256(),
     )
     .map_err(AdmissionError::Checkpoint)?;
-    if verified.semantic_manifest_sha256() != startup.expected_semantic_manifest_sha256 {
+    if verified.semantic_manifest_sha256()
+        != startup
+            .verified_remote_cursor
+            .cursor()
+            .semantic_manifest_sha256()
+    {
         return Err(AdmissionError::SemanticManifestPinMismatch);
     }
-    verify_admitted_checkpoint(startup.cursor_store, &verified, startup.expected_cursor)
-        .map_err(AdmissionError::Cursor)?;
+    verify_admitted_checkpoint(
+        startup.cursor_store,
+        &verified,
+        startup.verified_remote_cursor.cursor(),
+    )
+    .map_err(AdmissionError::Cursor)?;
     let bytes = load_state(startup.state_store, verified.root()).map_err(AdmissionError::Store)?;
     Ok((verified, bytes))
 }
@@ -308,8 +361,12 @@ fn recheck(
     verified: &bloch_local_state_checkpoint::VerifiedRootCheckpoint,
     bytes: &[u8],
 ) -> Result<(), AdmissionError> {
-    verify_admitted_checkpoint(startup.cursor_store, verified, startup.expected_cursor)
-        .map_err(AdmissionError::Cursor)?;
+    verify_admitted_checkpoint(
+        startup.cursor_store,
+        verified,
+        startup.verified_remote_cursor.cursor(),
+    )
+    .map_err(AdmissionError::Cursor)?;
     let current =
         load_state(startup.state_store, verified.root()).map_err(AdmissionError::Store)?;
     if current != bytes {
@@ -318,7 +375,10 @@ fn recheck(
     Ok(())
 }
 
-fn evidence(verified: &bloch_local_state_checkpoint::VerifiedRootCheckpoint) -> AdmissionEvidence {
+fn evidence(
+    verified: &bloch_local_state_checkpoint::VerifiedRootCheckpoint,
+    remote: &VerifiedRemoteCursor,
+) -> AdmissionEvidence {
     AdmissionEvidence {
         state_identity: verified.root().state_identity().into(),
         generation: verified.root().generation(),
@@ -326,6 +386,9 @@ fn evidence(verified: &bloch_local_state_checkpoint::VerifiedRootCheckpoint) -> 
         checkpoint_sha256: verified.checkpoint_sha256().into(),
         checkpoint_policy_sha256: verified.checkpoint_policy_sha256().into(),
         semantic_manifest_sha256: verified.semantic_manifest_sha256().into(),
+        remote_cursor_policy_sha256: remote.remote_cursor_policy_sha256().into(),
+        remote_cursor_observation_sha256: remote.observation_sha256().into(),
+        remote_cursor_observed_at_unix_seconds: remote.observed_at_unix_seconds(),
     }
 }
 

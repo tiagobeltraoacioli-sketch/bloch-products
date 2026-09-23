@@ -49,6 +49,12 @@ It is not production/root-authenticated admission. Before every pilot check, an
 operator must compare the staged root digest and generation with the current,
 authenticated off-host record.
 
+The unit filename is retained for compatibility, but its description now calls
+it a **synthetic storage-only check**. It must not be used as a dependency of a
+production target and cannot substitute for the remote-observation,
+coordination, checkpoint and semantic admission chain described in
+`REMOTE-CURSOR-OPERATIONS.md`.
+
 ## Read-only host survey
 
 Run these individually and retain the output in the change ticket. They do not

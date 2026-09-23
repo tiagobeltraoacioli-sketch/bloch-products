@@ -1,5 +1,5 @@
 [Unit]
-Description=Bloch products local-state admission for %i
+Description=Bloch products synthetic storage-only check for %i (not authenticated admission)
 Documentation=file:/usr/share/doc/bloch-products/AUXPOW-8GB-ADMISSION.md
 After=local-fs.target
 ConditionPathIsExecutable=/usr/local/libexec/bloch-products/bloch-local-state-store
@@ -53,4 +53,5 @@ IOWeight=10
 OOMPolicy=stop
 
 # This is an admission check, not a continuously running product service.
+# It is deliberately not part of the remote-cursor production chain.
 RemainAfterExit=no

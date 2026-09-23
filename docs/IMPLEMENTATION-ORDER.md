@@ -55,8 +55,11 @@ will follow working implementations and retained evidence.
    crash-safe two-phase CAS persistence for their exact bytes, threshold
    Ed25519 checkpoints authenticate roots and semantic-manifest digests without
    taking private keys, and a local cursor enforces exact lineage relative to
-   an independently supplied current cursor. Integration with a real external
-   monotonic cursor service, encryption and multi-host HA remain open.
+   an independently supplied current cursor. A nonce-bound threshold protocol
+   now authenticates fresh remote cursor observations, and a shared local lock
+   coordinates cooperating admission and writer processes. A real remote
+   monotonic service/CAS endpoint, qualified trust roots, trusted time,
+   encryption and multi-host HA remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

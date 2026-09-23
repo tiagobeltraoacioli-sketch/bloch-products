@@ -1,10 +1,11 @@
 # Bloch products deployment bundle
 
-This bundle admits an existing local Bloch Data or Bloch Pay state store on a
-small Unix node. It is deliberately not a daemon deployment and does not
+This synthetic-only bundle checks an existing local Bloch Data or Bloch Pay
+state store on a small Unix node. It is deliberately not authenticated product
+admission or a daemon deployment and does not
 install, stop, restart or reconfigure k3s, AuxPoW, pool, proxy or G4 services.
 
-The systemd template runs three admission checks:
+The systemd template runs three storage checks:
 
 1. `preflight.sh` validates the host, file ownership and modes, independent
    root placement, capacity and an explicit cohabitation approval marker.
@@ -21,7 +22,8 @@ for the reviewed installation plan.
 
 Files:
 
-- `systemd/bloch-products-admission@.service`: admission oneshot template.
+- `systemd/bloch-products-admission@.service`: legacy-named synthetic
+  storage-check oneshot; it is not a production admission unit.
 - `systemd/bloch-products.tmpfiles.conf`: optional directory declarations;
   review before using and never apply blindly on an occupied host.
 - `config/data.env.example` and `config/pay.env.example`: non-secret examples.

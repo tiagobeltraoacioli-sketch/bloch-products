@@ -1,0 +1,21 @@
+[package]
+name = "bloch-local-state-rebootstrap"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "bloch-local-state-rebootstrap"
+path = "src/bin/bloch-local-state-rebootstrap.rs"
+
+[dependencies]
+bloch-local-state-checkpoint = { path = "../bloch-local-state-checkpoint" }
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }
+ed25519-dalek.workspace = true
+hex.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

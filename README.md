@@ -107,6 +107,17 @@ identity, prove finality, activate a network, or authorize asset movement.
   cursor, product-specific semantic manifest and exact local state before
   replaying the product restore logic. Production writers still require a
   shared outer coordinator across the cursor and state stores.
+- `bloch-local-state-coordination`: bounded Unix exclusion shared by startup
+  admission and cooperating state/cursor writers. It detects unsafe local lock
+  objects but does not provide cross-host fencing or distributed consensus.
+- `bloch-local-state-remote-cursor`: canonical nonce-bound threshold Ed25519
+  observations of the exact cursor held by an external control plane, with a
+  secure offline verification CLI. Networking, remote storage and operational
+  independence remain external gates.
+- `bloch-local-state-rebootstrap`: offline, create-only v1-to-v2 re-bootstrap
+  for the narrow legacy case that already committed to a complete state-root
+  v2 and is re-signed by checkpoint authorities. It refuses root-v1 lineage,
+  policy rotation and any state/root divergence.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.
