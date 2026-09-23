@@ -15,6 +15,7 @@ members = [
   "crates/bloch-indexer-query",
   "crates/bloch-pay-reconciliation",
   "crates/bloch-pay-allocation-store",
+  "crates/bloch-pay-adjustments",
   "crates/bloch-verify-core",
   "crates/bloch-verify-cli",
 ]

@@ -28,9 +28,11 @@ will follow working implementations and retained evidence.
    fail-closed service admission are also implemented. A canonical regulated-data
    policy now denies cross-tenant/purpose/region/retention violations and permits
    only bounded hiding commitments at the on-chain boundary. Authenticated
-   network adapters, tenant-isolated encrypted storage, actual KMS/HSM and
-   commitment implementations, privacy lifecycle execution, independently
-   operated WORM replicas and distributed database/HA operation remain open.
+   network adapters, tenant-isolated encrypted storage, actual KMS/HSM,
+   qualified commitment implementations, physical privacy-lifecycle execution,
+   independently operated WORM replicas and distributed database/HA operation
+   remain open. Offline signed retention/legal-hold evidence and a deliberately
+   unqualified salted-record equality commitment are implemented.
 6. Non-custodial payment reconciliation — deterministic invoice/observation
    matching with pinned routes and permanently false settlement/credit claims is
    implemented. Exact observations can be authenticated against pinned Ed25519
@@ -41,7 +43,9 @@ will follow working implementations and retained evidence.
    authority thresholds can attest the exact observed block without claiming
    native consensus finality. Observer independence and qualification,
    consensus/ancestry proof, distributed allocation HA, hardened policy-wallet
-   operation, bank/Pix integration and credit policy remain open.
+   operation, bank/Pix integration and credit policy remain open. Authenticated
+   cancellation/dispute/refund observations now feed a replay-safe local state
+   machine, but no external adjustment is executed by the software.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

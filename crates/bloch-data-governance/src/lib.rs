@@ -10,12 +10,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 
+mod commitment;
 mod dataset_schema;
+mod lifecycle;
 mod record;
+pub use commitment::{
+    MAX_EXTERNAL_NONCE_BYTES, MIN_EXTERNAL_NONCE_BYTES, OfflineCommitmentError,
+    SALTED_RECORD_COMMITMENT_CONSTRUCTION_ID, SaltedRecordCommitment,
+    SaltedRecordCommitmentRequest, commit_authorized_json_record,
+    verify_authorized_json_record_commitment,
+};
 pub use dataset_schema::{
     DATASET_SCHEMA_SCHEMA, DatasetFieldSchema, DatasetSchema, DatasetSchemaError,
     DatasetValueSchema, MAX_ARRAY_ITEMS, MAX_DATASET_SCHEMA_BYTES, MAX_STRING_BYTES, ScalarType,
     canonical_dataset_schema_bytes, dataset_schema_sha256, parse_dataset_schema,
+};
+pub use lifecycle::{
+    AuthorizedLifecycleTransition, LIFECYCLE_POLICY_SCHEMA, LIFECYCLE_STATE_SCHEMA,
+    LIFECYCLE_TRANSITION_SCHEMA, LifecycleAction, LifecycleActor, LifecycleActorRole,
+    LifecycleError, LifecyclePhase, LifecyclePolicy, LifecycleState, LifecycleTransitionRequest,
+    apply_authorized_lifecycle_transition, authorize_lifecycle_transition,
+    canonical_lifecycle_policy_bytes, initialize_lifecycle_state, lifecycle_policy_sha256,
+    lifecycle_state_bytes, lifecycle_transition_signing_bytes, parse_lifecycle_policy,
 };
 pub use record::{
     AuthorizedJsonIngestion, JsonIngestionContext, JsonIngestionError, MAX_JSON_RECORD_BYTES,

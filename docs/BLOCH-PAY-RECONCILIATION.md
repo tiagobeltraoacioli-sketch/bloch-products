@@ -71,6 +71,14 @@ signed the exact observed block under a pinned per-network policy. It
 deliberately keeps `networkFinalityQualified` false because signatures from
 configured authorities are not a native consensus or ancestry proof.
 
+The `bloch-pay-adjustments` state machine accepts externally signed,
+policy-pinned observations of cancellation, dispute resolution and refund
+events. Every event is bound to the exact authenticated payment digest,
+sequence, authority, source and network. Exact replay is idempotent; conflicting
+identities, invalid transitions and an observed refund above the original
+payment amount fail closed. `refund_observed` is evidence from a configured
+source, not proof that funds settled or authority to credit an account.
+
 ## Remaining production gates
 
 - operational qualification and independence of the configured observers;
@@ -81,8 +89,8 @@ configured authorities are not a native consensus or ancestry proof.
 - hardened external policy-wallet/HSM operation, issuer revocation and key
   lifecycle controls;
 - privacy-governed storage and controlled customer/merchant APIs;
-- refunds, disputes, cancellations, currency/asset metadata governance and
-  accounting exports;
+- operational execution and qualification of cancellations/refunds,
+  currency/asset metadata governance and accounting exports;
 - approved credit/release policy and human/organizational authorities; and
 - authorized bank, payment institution, acquirer, Pix or settlement partners.
 

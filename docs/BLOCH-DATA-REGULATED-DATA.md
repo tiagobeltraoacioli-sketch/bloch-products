@@ -109,8 +109,13 @@ decision, an independently pinned canonical dataset schema validates required
 and optional top-level booleans, bounded integers, byte-bounded strings and
 bounded homogeneous scalar arrays. This v1 structural gate does not validate
 nested or institution-specific business semantics, authenticity, truth or
-legal authority. Until those deeper schemas, key management, tenant-isolated
-storage, retention execution and incident/data-subject workflows are
+legal authority. Signed lifecycle transitions can record legal holds, disposal
+orders and references to external disposal evidence for an admitted record;
+they never claim physical deletion, backup purge or regulatory compliance. A
+salted SHA-256 record commitment is also available for offline equality checks,
+but it is not a qualified hiding commitment and does not close the on-chain
+privacy gate. Until deeper schemas, key management, tenant-isolated storage,
+actual retention execution and incident/data-subject workflows are
 implemented and independently qualified, Bloch Data is not admitted to ingest
 production datasets from an exchange or regulated financial institution.
 

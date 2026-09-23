@@ -47,6 +47,33 @@ contract. It does not establish that values are true, current, authentic,
 lawful, correctly classified, or compliant with LGPD, GDPR or sector rules.
 Those decisions and authenticated provenance remain separate admission gates.
 
+## Offline lifecycle evidence
+
+The `lifecycle` module adds a deterministic local state machine for records
+already admitted by `authorize_json_ingestion`. Initialization binds the exact
+record digest, dataset-schema digest and governance-policy digest. A separate,
+canonical lifecycle authority policy is verified against an independently
+provisioned SHA-256 pin and must repeat the governance retention deadline,
+disposition and initial legal hold exactly.
+
+Legal-hold placement/release, disposal ordering and evidence recording require
+distinct authorized Ed25519 roles. A public key cannot be reused across those
+actors. Every transition is signed externally over a domain-separated,
+length-framed message containing the policy pin, exact record, prior state
+digest, monotonic sequence and timestamp. The crate contains no private-key or
+network API. Requests from the future, outside policy validity, against stale
+state, before the retention deadline, under an active hold, or with the wrong
+actor/disposition fail closed. The canonical state retains the signed audit
+chain and a digest reference to externally held evidence.
+
+`EvidenceRecorded` means only that an authorized actor signed a reference to
+some external evidence. It does not validate that evidence's contents or prove
+physical deletion, irreversible anonymization, backup/media purge, external
+execution, legal sufficiency, or LGPD/GDPR/sector compliance. The corresponding
+capability methods deliberately remain `false`. Durable storage, anti-rollback,
+multi-writer serialization, key custody and execution by storage systems remain
+deployment responsibilities.
+
 The policy's `constructionId` is an allowlist binding, not cryptographic proof.
 The operator must separately qualify and enforce a randomized, hiding
 commitment implementation; a plain deterministic hash of PII or financial data
@@ -54,3 +81,33 @@ is not acceptable. Runtime facts such as time, region, workload identity and
 the observed schema must come from authenticated platform controls. This crate
 does not give legal advice, claim regulatory compliance, inspect arbitrary
 payload bytes, manage keys, execute deletion, or publish transactions.
+
+## Offline salted-record commitment
+
+The crate includes the deliberately limited
+`sha256-salted-authorized-record-v1` construction for offline equality checks.
+It requires both an opaque authorized JSON ingestion and a separate opaque
+`PublishCommitment` authorization under the same pinned policy. It commits only
+to the exact, sorted `hiddenSourceFields` projection, and length-prefixes a
+fixed preimage domain, policy digest, artifact rule, construction ID, policy
+domain, independently pinned dataset-schema digest, field names and canonical
+values, followed by an external nonce. The result can be passed through the
+existing `authorize_onchain_commitment` gate. The nonce and opening never enter
+the on-chain envelope.
+
+The caller must generate a fresh, secret and unpredictable nonce for every
+commitment using an approved CSPRNG. The API accepts 32 through 64 bytes and
+rejects constant-byte values, but byte inspection cannot prove entropy,
+freshness, uniqueness or secrecy. Nonce generation and reuse tracking are
+therefore external operational controls. Reuse makes equal openings linkable;
+loss of nonce secrecy permits offline guesses.
+
+This salted SHA-256 construction is **not** a qualified hiding commitment.
+Low-entropy identifiers, balances and other structured financial values remain
+vulnerable to dictionary attacks when a nonce is weak, reused, disclosed or
+compromised. It provides no zero-knowledge property, proof of knowledge,
+binding beyond SHA-256 collision resistance, authenticated provenance,
+consensus finality or regulatory compliance. Keep all source values, field
+names, policy/schema digests and nonce material off-chain. A separately
+reviewed commitment scheme and operational design are still required before
+setting any `qualified_hiding_commitment` capability to true.

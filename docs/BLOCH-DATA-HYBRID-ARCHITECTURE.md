@@ -105,7 +105,11 @@ policy revocation. Contract events must emit only the approved public subset.
 
 ## Current status
 
-This repository does not yet contain the confidential execution runtime,
+This repository now contains an offline salted-record commitment for authorized
+record projections and a signed retention/legal-hold evidence state machine.
+The former cannot prove nonce entropy or hiding strength; the latter records an
+external evidence reference but cannot execute or prove physical deletion.
+The repository still does not contain the confidential execution runtime,
 tenant-isolated encrypted store, KMS/HSM integration, privacy release policy,
-proof circuit or on-chain verifier described above. They are production gates,
-not inferred capabilities of the existing indexer integrity core.
+qualified commitment/proof circuit or on-chain verifier described above. They
+remain production gates.

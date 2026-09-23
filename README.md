@@ -65,6 +65,10 @@ identity, prove finality, activate a network, or authorize asset movement.
   record bytes with a bound digest instead of trusting caller-declared fields.
   An independently pinned canonical dataset schema now validates required and
   optional scalar fields before the governance decision.
+- Bloch Data lifecycle evidence binds each admitted record to signed legal-hold,
+  disposal-order and external-evidence transitions without claiming physical
+  deletion. A salted-record commitment supports offline equality checks but
+  deliberately remains unqualified as a production hiding commitment.
 - `bloch-pay-reconciliation`: pinned payment routes and observation sources,
   canonical invoices, deterministic exact/partial/excess/late matching and
   exact canonical observations authenticated by domain-separated Ed25519
@@ -79,6 +83,9 @@ identity, prove finality, activate a network, or authorize asset movement.
   invoice authorization, and signed checkpoints bind complete local snapshots
   to independently retained generation/digest expectations. None of these
   qualify settlement, credit, replication or HA.
+- `bloch-pay-adjustments`: authenticated, replay-safe observations of
+  cancellation, dispute and refund lifecycles bound to the exact payment. It
+  observes events only and never sends refunds or moves funds.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.
@@ -159,6 +166,8 @@ The non-custodial Bloch Pay reconciliation boundary is documented in
 [`docs/BLOCH-PAY-RECONCILIATION.md`](docs/BLOCH-PAY-RECONCILIATION.md), with the
 authenticated allocation flow in
 [`docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md`](docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md).
+The adjustment state-machine boundary is documented in
+[`crates/bloch-pay-adjustments/README.md`](crates/bloch-pay-adjustments/README.md).
 
 ## Product boundaries
 
