@@ -9,7 +9,7 @@ profile is `bloch-l2-700771-production.v1` and requires every gate below.
 | Network identity | `bloch.verify.network-identity.v1` | Implemented |
 | Authenticated comparison | `bloch.verify.signed-checkpoint-bundle.v1` | Implemented |
 | Organization independence | `bloch.verify.organization-independence-evidence.v1` | Implemented library and offline CLI verifier |
-| Checkpoint ancestry | `bloch.verify.authenticated-checkpoint-ancestry.v1` | Implemented library capability; no CLI composition yet |
+| Checkpoint ancestry | `bloch.verify.authenticated-checkpoint-ancestry.v1` | Implemented library capability and offline ceremony tooling; no CLI production composition yet |
 | Consensus finality | `bloch.verify.consensus-finality-proof.v1` | Gate unavailable; pinned-set certificate primitive implemented |
 
 An unsupported gate is emitted as `verifierUnavailable`, never as passed.
@@ -57,6 +57,16 @@ when the verified capability and its independent policy pin are absent. The CLI
 can compose the capability only when all three optional inputs are present: the
 canonical evidence, canonical policy and independently retained policy digest.
 Partial input is refused rather than silently ignored.
+
+The separate `bloch-verify-ancestry-ceremony` command validates and digests a
+canonical ancestry policy, publishes the exact binary signing message and
+assembles canonical evidence from detached Ed25519 signatures. It never reads
+a private key. Assembly checks the chain, audience, validity interval,
+authority order, signature validity and threshold before using private,
+create-once output. This is ceremony preparation and structural authentication,
+not production verification: the command neither creates nor accepts a
+`VerifiedTrustedTime`, does not return a `VerifiedCheckpointAncestry` capability
+and is deliberately not connected to `assess-signed`.
 
 The caller must provide the reviewed production `NetworkIdentity`; the profile
 accepts only chain ID `700771` and pins the supplied genesis hash without

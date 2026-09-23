@@ -24,6 +24,9 @@ identity, prove finality, activate a network, or authorize asset movement.
   one exact checkpoint under an independently pinned generation-1 validator
   set. This is a certificate primitive, not proof that a deployed L2 executes
   the corresponding consensus protocol or validator-set transitions.
+- `bloch-route-risk`: deterministic, integer-only comparison of policy-pinned
+  swap and bridge quotes for one exact network/asset pair and input amount.
+  Quote provenance remains unauthenticated and execution is always denied.
 - Create-once detached-signature requests and signed-bundle assembly.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
@@ -300,6 +303,8 @@ authenticated allocation flow in
 [`docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md`](docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md).
 The adjustment state-machine boundary is documented in
 [`crates/bloch-pay-adjustments/README.md`](crates/bloch-pay-adjustments/README.md).
+The read-only aggregator/bridge comparison boundary is documented in
+[`crates/bloch-route-risk/README.md`](crates/bloch-route-risk/README.md).
 
 ## Product boundaries
 

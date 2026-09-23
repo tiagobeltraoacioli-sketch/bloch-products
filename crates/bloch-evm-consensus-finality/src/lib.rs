@@ -1,8 +1,9 @@
 //! Weighted validator-set verification for one pinned EVM/L2 checkpoint.
 //!
-//! V1 accepts only one independently pinned generation. It intentionally has
-//! no validator-set transition path. Signature quorum is not an implementation
-//! of chain consensus, ancestry, organizational independence or settlement.
+//! Checkpoint-certificate V1 accepts only one independently pinned generation.
+//! Validator-set changes use a separate, explicit dual-quorum protocol and are
+//! not accepted by the checkpoint verifier. Signature quorum is not an
+//! implementation of chain consensus, ancestry, independence or settlement.
 
 use bloch_trusted_time::VerifiedTrustedTime;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -11,6 +12,19 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+
+mod validator_set_transition;
+
+pub use validator_set_transition::{
+    TRANSITIONED_VALIDATOR_SET_MODE, VALIDATOR_SET_MANIFEST_SCHEMA,
+    VALIDATOR_SET_TRANSITION_CERTIFICATE_SCHEMA, VALIDATOR_SET_TRANSITION_ENVELOPE_SCHEMA,
+    VALIDATOR_SET_TRANSITION_PROTOCOL, ValidatorSetManifest, ValidatorSetTransitionError,
+    ValidatorSetTransitionSignatures, ValidatorSetTransitionSigningMessages,
+    ValidatorSetTransitionSource, VerifiedValidatorSetTransition, consensus_validator_set_manifest,
+    create_validator_set_transition_certificate, parse_validator_set_manifest,
+    validator_set_manifest_sha256, validator_set_transition_signing_messages,
+    verify_validator_set_transition,
+};
 
 pub const CONSENSUS_FINALITY_POLICY_SCHEMA: &str =
     "bloch.products.evm-consensus-finality-policy.v1";

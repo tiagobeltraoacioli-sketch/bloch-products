@@ -46,6 +46,7 @@ members = [
   "crates/bloch-pay-reconciliation",
   "crates/bloch-pay-allocation-store",
   "crates/bloch-pay-adjustments",
+  "crates/bloch-route-risk",
   "crates/bloch-verify-core",
   "crates/bloch-verify-cli",
 ]

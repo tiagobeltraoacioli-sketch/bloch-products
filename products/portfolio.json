@@ -28,8 +28,8 @@
       "id": "bloch-router-bridge-l2",
       "priority": "P3",
       "status": "blocked-by-production-qualification",
-      "capabilities": ["route-comparison", "risk-explanation", "qualified-execution"],
-      "gates": ["settlement-proof", "reserve-reconciliation", "independent-review"]
+      "capabilities": ["read-only-route-comparison", "deterministic-risk-explanation", "policy-pinned-route-limits", "execution-authorized-false"],
+      "gates": ["authenticated-quote-provenance", "transaction-simulation", "settlement-proof", "reserve-reconciliation", "independent-execution-authorization", "independent-review"]
     },
     {
       "id": "bloch-markets-proof-ledger",

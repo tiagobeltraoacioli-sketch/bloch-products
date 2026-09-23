@@ -96,7 +96,11 @@ will follow working implementations and retained evidence.
    rollback-resistant retention, suspend/resume qualification, replicated
    remote deployment, operational trust roots, encryption and multi-host HA
    remain open.
-7. Read-only route risk comparison.
+7. Read-only route risk comparison — deterministic policy-pinned comparison is
+   implemented with exact integer amounts, bounded quote freshness, fee/risk/
+   settlement limits and permanently false authentication/execution claims.
+   Authenticated quote provenance, live adapters, simulation and execution
+   authorization remain open.
 8. Regulated or value-moving products only after their external gates pass.
 
 Each phase must preserve the distinction between structural validation,
