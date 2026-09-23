@@ -30,6 +30,25 @@ validated representation. The trusted-time audience is immutable across the
 chain, and each capability is bounded by the certificate, new set,
 predecessor and trusted-time deadlines.
 
+## Checkpoints after a validator-set transition
+
+The separate `transitionedValidatorSetV1` checkpoint format accepts only a
+live `VerifiedValidatorSetTransition`. Its signed envelope binds the root
+finality-policy digest, exact transition-certificate and predecessor-authority
+digests, canonical validator-set manifest digest and generation, signature
+domain, network, chain ID, genesis hash, exact checkpoint and exact verified
+trusted-time token and audience. A certificate cannot therefore be replayed
+onto a sibling transition, another generation, another network or a refreshed
+time token. Signatures are checked against the transitioned manifest's strict
+weighted quorum.
+
+This is a new, role-separated envelope, certificate schema, signing prefix and
+protocol identifier. It does not reinterpret or widen `pinnedV1`, and the
+production qualification gate does not consume this capability. It proves a
+certificate relationship only: it does not prove that production nodes
+installed the transition, executed consensus with the set, selected a unique
+fork, or made the checkpoint safe for settlement.
+
 There is no implicit fallback, recovery key, quorum override, generation skip
 or time-audience migration. Those require a separately reviewed protocol
 version.

@@ -9,6 +9,17 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+mod provenance;
+
+pub use provenance::{
+    MAX_PROVENANCE_ENVELOPE_BYTES, MAX_PROVENANCE_POLICY_BYTES, QUOTE_PROVENANCE_ENVELOPE_SCHEMA,
+    QUOTE_PROVENANCE_POLICY_SCHEMA, QuoteAuthority, QuoteAuthoritySignature,
+    QuoteProvenanceEnvelope, QuoteProvenanceError, QuoteProvenancePolicy, VerifiedQuoteProvenance,
+    canonical_quote_bytes, canonical_quote_provenance_policy_bytes, parse_quote_provenance_policy,
+    quote_provenance_policy_sha256, quote_set_sha256, quote_signing_message,
+    verify_quote_provenance,
+};
+
 pub const ROUTE_RISK_POLICY_SCHEMA: &str = "bloch.products.route-risk-policy.v1";
 pub const ROUTE_RISK_REPORT_SCHEMA: &str = "bloch.products.route-risk-report.v1";
 pub const MAX_POLICY_BYTES: usize = 256 * 1024;
@@ -99,6 +110,8 @@ pub enum RouteRiskError {
     PolicyNotEffective,
     #[error("route-risk arithmetic overflow")]
     ArithmeticOverflow,
+    #[error("quote provenance is invalid for this comparison")]
+    QuoteProvenance(#[source] QuoteProvenanceError),
 }
 
 pub fn canonical_policy_bytes(policy: &RouteRiskPolicy) -> Result<Vec<u8>, RouteRiskError> {
@@ -187,6 +200,29 @@ pub fn compare_routes(
         execution_authorized: false,
         assessments,
     })
+}
+
+/// Compares an exact quote set after its source signatures have been verified.
+/// Authentication proves only that a pinned quorum signed these bytes for this
+/// audience; it proves neither quote quality nor settlement/finality.
+pub fn compare_authenticated_routes(
+    policy: &RouteRiskPolicy,
+    expected_policy_sha256: &str,
+    quotes: &[RouteQuote],
+    evaluated_at_unix_seconds: u64,
+    provenance: &VerifiedQuoteProvenance,
+) -> Result<RouteRiskReport, RouteRiskError> {
+    provenance
+        .authorize_comparison(expected_policy_sha256, quotes, evaluated_at_unix_seconds)
+        .map_err(RouteRiskError::QuoteProvenance)?;
+    let mut report = compare_routes(
+        policy,
+        expected_policy_sha256,
+        quotes,
+        evaluated_at_unix_seconds,
+    )?;
+    report.quote_input_authenticated = true;
+    Ok(report)
 }
 
 fn assess_quote(

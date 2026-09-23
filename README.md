@@ -22,11 +22,13 @@ identity, prove finality, activate a network, or authorize asset movement.
   and authenticated trusted time. It cannot satisfy consensus finality.
 - `bloch-evm-consensus-finality`: verifies a fresh weighted Ed25519 quorum over
   one exact checkpoint under an independently pinned generation-1 validator
-  set. This is a certificate primitive, not proof that a deployed L2 executes
-  the corresponding consensus protocol or validator-set transitions.
+  set. Dual-quorum validator transitions and role-separated certificates under
+  a transitioned set are also verified, without claiming node installation.
 - `bloch-route-risk`: deterministic, integer-only comparison of policy-pinned
   swap and bridge quotes for one exact network/asset pair and input amount.
-  Quote provenance remains unauthenticated and execution is always denied.
+  Optional threshold Ed25519 provenance authenticates exact quote bytes for one
+  audit instant; quote quality and execution remain unproved and execution is
+  always denied.
 - Create-once detached-signature requests and signed-bundle assembly.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.

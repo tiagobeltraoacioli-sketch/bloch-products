@@ -13,7 +13,16 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+mod transitioned_finality;
 mod validator_set_transition;
+
+pub use transitioned_finality::{
+    TRANSITIONED_CONSENSUS_FINALITY_CERTIFICATE_SCHEMA,
+    TRANSITIONED_CONSENSUS_FINALITY_ENVELOPE_SCHEMA, TRANSITIONED_CONSENSUS_FINALITY_PROTOCOL,
+    TransitionedConsensusFinalityError, VerifiedTransitionedConsensusFinality,
+    create_transitioned_consensus_finality_certificate,
+    transitioned_consensus_finality_signing_message, verify_transitioned_consensus_finality,
+};
 
 pub use validator_set_transition::{
     TRANSITIONED_VALIDATOR_SET_MODE, VALIDATOR_SET_MANIFEST_SCHEMA,
