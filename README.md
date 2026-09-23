@@ -17,7 +17,10 @@ identity, prove finality, activate a network, or authorize asset movement.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
 - Descriptor-bound input/output handling and recursive duplicate-key rejection.
-- `bloch-indexer-core`: anchored canonical-chain state machine with bounded reorgs.
+- `bloch-indexer-core`: anchored canonical-chain state machine with bounded
+  reorgs, atomic restart snapshots and a deterministic idempotent outbox.
+- `bloch-indexer-input`: bounded strict-JSON validation before canonical state
+  transitions.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
 
@@ -65,6 +68,11 @@ retained canonical SHA-256.
 `--require-production-qualified` intentionally exits nonzero in this version.
 Real-world organizational independence and authenticated consensus
 finality/ancestry are not implemented yet.
+
+The indexer snapshot and pending outbox are recovered together. No webhook
+delivery, acknowledgement worker, read API, database-backed HA deployment or
+authenticated finality source is implemented yet; the indexer remains a local
+fail-closed core rather than a production service.
 
 ## Product boundaries
 

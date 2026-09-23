@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+pub mod outbox;
+pub mod storage;
+
 const BLOCK_SCHEMA: &str = "bloch.data.canonical-block.v1";
 const MAX_EVENTS_PER_BLOCK: usize = 10_000;
 const MAX_DATA_BYTES: usize = 262_144;
@@ -282,6 +285,14 @@ fn validate_block(block: &CanonicalBlock) -> Result<(), IndexerError> {
         previous_log_index = Some(event.log_index);
     }
     Ok(())
+}
+
+/// Validates a block without mutating indexer state.
+///
+/// Input adapters should call this after decoding so the same canonical
+/// semantics are enforced at ingestion and when applying a block.
+pub fn validate_canonical_block(block: &CanonicalBlock) -> Result<(), IndexerError> {
+    validate_block(block)
 }
 
 fn validate_event(event: &CanonicalEvent) -> Result<(), IndexerError> {
