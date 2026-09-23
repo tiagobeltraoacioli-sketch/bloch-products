@@ -1,14 +1,11 @@
+use bloch_verify::secure_io::{create_private_directory, read_secure, write_create};
 use bloch_verify_core::{
     assemble_signed_bundle, import_observation_signature, parse_observation, parse_signed_response,
     parse_signing_request, parse_trust_policy, prepare_signing_request,
 };
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-const MAX_INPUT_BYTES: u64 = 1_048_576;
 
 fn main() -> ExitCode {
     match run() {
@@ -45,9 +42,9 @@ fn prepare(arguments: Vec<(String, String)>) -> Result<(), String> {
             "--out-dir",
         ],
     )?;
-    let observation = parse_observation(&read_safe(Path::new(observation_path), "observation")?)
+    let observation = parse_observation(&read_secure(Path::new(observation_path), "observation")?)
         .map_err(|error| error.to_string())?;
-    let policy = parse_trust_policy(&read_safe(Path::new(policy_path), "trust policy")?)
+    let policy = parse_trust_policy(&read_secure(Path::new(policy_path), "trust policy")?)
         .map_err(|error| error.to_string())?;
     let (request, message) = prepare_signing_request(&policy, expected, &observation)
         .map_err(|error| error.to_string())?;
@@ -60,12 +57,12 @@ fn prepare(arguments: Vec<(String, String)>) -> Result<(), String> {
 
 fn import(arguments: Vec<(String, String)>) -> Result<(), String> {
     exact_options(&arguments, &["--request", "--signature", "--response-out"])?;
-    let request = parse_signing_request(&read_safe(
+    let request = parse_signing_request(&read_secure(
         Path::new(one(&arguments, "--request")?),
         "request",
     )?)
     .map_err(|error| error.to_string())?;
-    let signature = read_safe(Path::new(one(&arguments, "--signature")?), "signature")?;
+    let signature = read_secure(Path::new(one(&arguments, "--signature")?), "signature")?;
     let response =
         import_observation_signature(&request, &signature).map_err(|error| error.to_string())?;
     write_json_create(Path::new(one(&arguments, "--response-out")?), &response)?;
@@ -82,7 +79,7 @@ fn assemble(arguments: Vec<(String, String)>) -> Result<(), String> {
             "--bundle-out",
         ],
     )?;
-    let policy = parse_trust_policy(&read_safe(
+    let policy = parse_trust_policy(&read_secure(
         Path::new(one(&arguments, "--trust-policy")?),
         "trust policy",
     )?)
@@ -90,7 +87,7 @@ fn assemble(arguments: Vec<(String, String)>) -> Result<(), String> {
     let mut responses = Vec::new();
     for path in many(&arguments, "--response")? {
         responses.push(
-            parse_signed_response(&read_safe(Path::new(path), "response")?)
+            parse_signed_response(&read_secure(Path::new(path), "response")?)
                 .map_err(|error| error.to_string())?,
         );
     }
@@ -165,72 +162,11 @@ fn many<'a>(arguments: &'a [(String, String)], name: &str) -> Result<Vec<&'a str
     Ok(values)
 }
 
-fn read_safe(path: &Path, label: &str) -> Result<Vec<u8>, String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("cannot inspect {label}: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(format!("{label} must be a regular non-symlink file"));
-    }
-    if metadata.len() == 0 || metadata.len() > MAX_INPUT_BYTES {
-        return Err(format!("{label} is empty or exceeds 1 MiB"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1 || metadata.permissions().mode() & 0o022 != 0 {
-            return Err(format!(
-                "{label} must be single-link and not group/world writable"
-            ));
-        }
-    }
-    fs::read(path).map_err(|error| format!("cannot read {label}: {error}"))
-}
-
-#[cfg(unix)]
-fn create_private_directory(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt;
-    let mut builder = fs::DirBuilder::new();
-    builder.mode(0o700);
-    builder
-        .create(path)
-        .map_err(|error| format!("cannot create output directory: {error}"))
-}
-
-#[cfg(not(unix))]
-fn create_private_directory(path: &Path) -> Result<(), String> {
-    fs::create_dir(path).map_err(|error| format!("cannot create output directory: {error}"))
-}
-
 fn write_json_create(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let mut bytes =
         serde_json::to_vec(value).map_err(|error| format!("cannot serialize output: {error}"))?;
     bytes.push(b'\n');
     write_create(path, &bytes)
-}
-
-fn write_create(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
-    file.write_all(bytes)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("cannot sync {}: {error}", path.display()))?;
-    if let Some(parent) = path.parent() {
-        let directory = fs::File::open(parent)
-            .map_err(|error| format!("cannot open output directory: {error}"))?;
-        directory
-            .sync_all()
-            .map_err(|error| format!("cannot sync output directory: {error}"))?;
-    }
-    Ok(())
 }
 
 fn usage() -> String {

@@ -16,6 +16,7 @@ identity, prove finality, activate a network, or authorize asset movement.
 - Create-once detached-signature requests and signed-bundle assembly.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
+- Descriptor-bound input/output handling and recursive duplicate-key rejection.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
 
@@ -49,6 +50,14 @@ The EVM input boundary is documented in
 [`docs/EVM-RPC-CAPTURE.md`](docs/EVM-RPC-CAPTURE.md). The adapter does not make
 network requests and never treats a node's `finalized` response as independent
 consensus proof.
+[`docs/EVM-RPC-BATCH-CAPTURE.md`](docs/EVM-RPC-BATCH-CAPTURE.md) describes the
+deterministic four-call request and retained-response importer.
+[`docs/EVM-ANCESTRY-EVIDENCE.md`](docs/EVM-ANCESTRY-EVIDENCE.md) documents the
+bounded structural header-linkage verifier; it deliberately does not claim
+consensus finality.
+[`docs/PRODUCTION-QUALIFICATION-GATES.md`](docs/PRODUCTION-QUALIFICATION-GATES.md)
+defines the chain- and genesis-bound production profile and records unavailable
+verifiers without accepting caller-provided success claims.
 
 `--require-production-qualified` intentionally exits nonzero in this version.
 Real-world organizational independence and authenticated consensus

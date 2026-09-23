@@ -3,6 +3,8 @@
 `bloch-verify-evm-adapter` converts a retained EVM JSON-RPC capture into the
 strict observation consumed by the detached-signature workflow. It performs no
 network access and cannot silently select a different endpoint during review.
+The deterministic request/response assembly procedure is documented in
+[`EVM-RPC-BATCH-CAPTURE.md`](EVM-RPC-BATCH-CAPTURE.md).
 
 The capture schema is `bloch.verify.evm-rpc-capture.v1`. It contains the
 observer and organization identifiers, an endpoint SHA-256 commitment, capture

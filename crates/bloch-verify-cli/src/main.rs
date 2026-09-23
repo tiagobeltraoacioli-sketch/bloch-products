@@ -1,12 +1,10 @@
+use bloch_verify::secure_io::read_secure;
 use bloch_verify_core::{
     assess, assess_signed, parse_bundle, parse_signed_bundle, parse_trust_policy,
 };
 use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
-
-const MAX_INPUT_BYTES: u64 = 1_048_576;
 
 enum Mode {
     Unsigned,
@@ -37,7 +35,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let arguments = arguments()?;
-    let bundle_bytes = read_safe(&arguments.bundle, "bundle")?;
+    let bundle_bytes = read_secure(&arguments.bundle, "bundle")?;
     let report = match &arguments.mode {
         Mode::Unsigned => {
             let bundle = parse_bundle(&bundle_bytes).map_err(|error| error.to_string())?;
@@ -47,7 +45,7 @@ fn run() -> Result<ExitCode, String> {
             trust_policy,
             expected_trust_policy_sha256,
         } => {
-            let policy_bytes = read_safe(trust_policy, "trust policy")?;
+            let policy_bytes = read_secure(trust_policy, "trust policy")?;
             let bundle = parse_signed_bundle(&bundle_bytes).map_err(|error| error.to_string())?;
             let policy = parse_trust_policy(&policy_bytes).map_err(|error| error.to_string())?;
             assess_signed(
@@ -71,27 +69,6 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn read_safe(path: &Path, label: &str) -> Result<Vec<u8>, String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("cannot inspect {label}: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(format!("{label} must be a regular non-symlink file"));
-    }
-    if metadata.len() == 0 || metadata.len() > MAX_INPUT_BYTES {
-        return Err(format!("{label} is empty or exceeds 1 MiB"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.nlink() != 1 || metadata.permissions().mode() & 0o022 != 0 {
-            return Err(format!(
-                "{label} must be single-link and not group/world writable"
-            ));
-        }
-    }
-    fs::read(path).map_err(|error| format!("cannot read {label}: {error}"))
 }
 
 fn arguments() -> Result<Arguments, String> {

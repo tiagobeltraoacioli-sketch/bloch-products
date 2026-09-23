@@ -13,6 +13,7 @@ publish = false
 [workspace.dependencies]
 ed25519-dalek = "2.2.0"
 hex = "0.4.3"
+libc = "0.2.180"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"

@@ -1,8 +1,11 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use thiserror::Error;
+
+pub mod qualification;
 
 const MAX_BUNDLE_BYTES: usize = 1_048_576;
 const MAX_OBSERVATIONS: usize = 64;
@@ -13,6 +16,8 @@ const OBSERVATION_SIGNATURE_DOMAIN: &str = "bloch.verify.node-observation.v1";
 const SIGNING_REQUEST_SCHEMA: &str = "bloch.verify.observation-signing-request.v1";
 const SIGNED_RESPONSE_SCHEMA: &str = "bloch.verify.signed-observation-response.v1";
 const EVM_RPC_CAPTURE_SCHEMA: &str = "bloch.verify.evm-rpc-capture.v1";
+const EVM_ANCESTRY_EVIDENCE_SCHEMA: &str = "bloch.verify.evm-ancestry-evidence.v1";
+const MAX_ANCESTRY_HEADERS: usize = 4_096;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VerifyError {
@@ -40,7 +45,7 @@ pub struct EvidenceBundle {
     pub observations: Vec<NodeObservation>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct NetworkIdentity {
     pub network: String,
@@ -158,6 +163,52 @@ pub struct EvmRpcCapture {
     pub finalized_block: JsonRpcExchange,
 }
 
+/// An offline, ordered snapshot of EVM headers linking a checkpoint to a block
+/// an upstream source labels finalized. This proves only internal parent-hash
+/// linkage; it does not prove that consensus finalized the terminal block.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EvmAncestryEvidence {
+    pub schema: String,
+    pub network: NetworkIdentity,
+    pub checkpoint: Checkpoint,
+    pub finalized: EvmBlockReference,
+    pub headers: Vec<EvmAncestryHeader>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EvmBlockReference {
+    pub height: u64,
+    pub block_hash: String,
+    pub state_root: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EvmAncestryHeader {
+    pub height: u64,
+    pub block_hash: String,
+    pub parent_hash: String,
+    pub state_root: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmAncestryReport {
+    pub schema: &'static str,
+    pub evidence_sha256: String,
+    pub checkpoint_height: u64,
+    pub finalized_height: u64,
+    pub header_count: usize,
+    pub contiguous_heights: bool,
+    pub parent_hash_linkage_verified: bool,
+    pub endpoints_matched: bool,
+    pub consensus_finality_authenticated: bool,
+    pub production_qualified: bool,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct JsonRpcExchange {
@@ -231,59 +282,89 @@ pub struct AuthenticationBoundary {
 
 pub fn parse_bundle(bytes: &[u8]) -> Result<EvidenceBundle, VerifyError> {
     safe_size(bytes)?;
-    let bundle: EvidenceBundle = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let bundle: EvidenceBundle = parse_strict_json(bytes)?;
     validate_shape(&bundle)?;
     Ok(bundle)
 }
 
 pub fn parse_signed_bundle(bytes: &[u8]) -> Result<SignedEvidenceBundle, VerifyError> {
     safe_size(bytes)?;
-    let bundle: SignedEvidenceBundle = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let bundle: SignedEvidenceBundle = parse_strict_json(bytes)?;
     validate_signed_shape(&bundle)?;
     Ok(bundle)
 }
 
 pub fn parse_trust_policy(bytes: &[u8]) -> Result<OperatorTrustPolicy, VerifyError> {
     safe_size(bytes)?;
-    let policy: OperatorTrustPolicy = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let policy: OperatorTrustPolicy = parse_strict_json(bytes)?;
     validate_trust_policy(&policy)?;
     Ok(policy)
 }
 
 pub fn parse_observation(bytes: &[u8]) -> Result<NodeObservation, VerifyError> {
     safe_size(bytes)?;
-    let observation: NodeObservation = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let observation: NodeObservation = parse_strict_json(bytes)?;
     validate_observation(&observation)?;
     Ok(observation)
 }
 
 pub fn parse_signing_request(bytes: &[u8]) -> Result<ObservationSigningRequest, VerifyError> {
     safe_size(bytes)?;
-    let request: ObservationSigningRequest = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let request: ObservationSigningRequest = parse_strict_json(bytes)?;
     validate_signing_request(&request)?;
     Ok(request)
 }
 
 pub fn parse_signed_response(bytes: &[u8]) -> Result<SignedObservationResponse, VerifyError> {
     safe_size(bytes)?;
-    let response: SignedObservationResponse = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let response: SignedObservationResponse = parse_strict_json(bytes)?;
     validate_signed_response(&response)?;
     Ok(response)
 }
 
 pub fn parse_evm_rpc_capture(bytes: &[u8]) -> Result<EvmRpcCapture, VerifyError> {
     safe_size(bytes)?;
-    let capture: EvmRpcCapture = serde_json::from_slice(bytes)
-        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    let capture: EvmRpcCapture = parse_strict_json(bytes)?;
     validate_evm_rpc_capture(&capture)?;
     observation_from_evm_rpc_capture(&capture)?;
     Ok(capture)
+}
+
+pub fn parse_json_rpc_responses(bytes: &[u8]) -> Result<Vec<JsonRpcResponse>, VerifyError> {
+    safe_size(bytes)?;
+    parse_strict_json(bytes)
+}
+
+pub fn parse_evm_ancestry_evidence(bytes: &[u8]) -> Result<EvmAncestryEvidence, VerifyError> {
+    safe_size(bytes)?;
+    let evidence: EvmAncestryEvidence = parse_strict_json(bytes)?;
+    validate_evm_ancestry_evidence(&evidence)?;
+    Ok(evidence)
+}
+
+/// Verifies the exact, ascending parent-hash chain in an offline evidence
+/// object. A successful report must not be interpreted as consensus finality:
+/// the terminal `finalized` label still originates outside this verifier.
+pub fn verify_evm_ancestry_evidence(
+    evidence: &EvmAncestryEvidence,
+) -> Result<EvmAncestryReport, VerifyError> {
+    validate_evm_ancestry_evidence(evidence)?;
+    Ok(EvmAncestryReport {
+        schema: "bloch.verify.evm-ancestry-report.v1",
+        evidence_sha256: canonical_digest(evidence)?,
+        checkpoint_height: evidence.checkpoint.height,
+        finalized_height: evidence.finalized.height,
+        header_count: evidence.headers.len(),
+        contiguous_heights: true,
+        parent_hash_linkage_verified: true,
+        endpoints_matched: true,
+        consensus_finality_authenticated: false,
+        production_qualified: false,
+        reasons: vec![
+            "header ancestry is internally linked but the finalized label is not a consensus proof"
+                .into(),
+        ],
+    })
 }
 
 pub fn observation_from_evm_rpc_capture(
@@ -311,6 +392,11 @@ pub fn observation_from_evm_rpc_capture(
         return Err(VerifyError::InvalidField("evmRpcCapture.blockHeight"));
     }
     hash32(&genesis.hash, "evmRpcCapture.genesisBlock.hash")?;
+    zero_hash32(
+        &genesis.parent_hash,
+        "evmRpcCapture.genesisBlock.parentHash",
+    )?;
+    hash32(&genesis.state_root, "evmRpcCapture.genesisBlock.stateRoot")?;
     hash32(&finalized.hash, "evmRpcCapture.finalizedBlock.hash")?;
     hash32(
         &finalized.parent_hash,
@@ -320,6 +406,9 @@ pub fn observation_from_evm_rpc_capture(
         &finalized.state_root,
         "evmRpcCapture.finalizedBlock.stateRoot",
     )?;
+    if finalized.hash == genesis.hash || finalized.hash == finalized.parent_hash {
+        return Err(VerifyError::InvalidField("evmRpcCapture.finalizedBlock"));
+    }
     let node_version = capture
         .client_version
         .response
@@ -736,6 +825,110 @@ fn safe_size(bytes: &[u8]) -> Result<(), VerifyError> {
     Ok(())
 }
 
+fn parse_strict_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, VerifyError> {
+    let mut duplicate_check = serde_json::Deserializer::from_slice(bytes);
+    DuplicateChecked
+        .deserialize(&mut duplicate_check)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    duplicate_check
+        .end()
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    serde_json::from_slice(bytes).map_err(|error| VerifyError::InvalidJson(error.to_string()))
+}
+
+struct DuplicateChecked;
+
+impl<'de> DeserializeSeed<'de> for DuplicateChecked {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DuplicateCheckedVisitor)
+    }
+}
+
+struct DuplicateCheckedVisitor;
+
+impl<'de> Visitor<'de> for DuplicateCheckedVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DuplicateChecked.deserialize(deserializer)
+    }
+
+    fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DuplicateChecked.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence.next_element_seed(DuplicateChecked)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = BTreeSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key: {key}"
+                )));
+            }
+            map.next_value_seed(DuplicateChecked)?;
+        }
+        Ok(())
+    }
+}
+
 fn canonical_digest<T: Serialize>(value: &T) -> Result<String, VerifyError> {
     let bytes =
         serde_json::to_vec(value).map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
@@ -801,6 +994,110 @@ fn validate_signed_response(response: &SignedObservationResponse) -> Result<(), 
     )?;
     key.verify(&message, &Signature::from_bytes(&signature_bytes))
         .map_err(|_| VerifyError::InvalidSignature(response.request.observer_id.clone()))?;
+    Ok(())
+}
+
+fn validate_evm_ancestry_evidence(evidence: &EvmAncestryEvidence) -> Result<(), VerifyError> {
+    if evidence.schema != EVM_ANCESTRY_EVIDENCE_SCHEMA
+        || !valid_identifier(&evidence.network.network)
+        || evidence.network.chain_id == 0
+    {
+        return Err(VerifyError::InvalidField("evmAncestryEvidence"));
+    }
+    hash32(
+        &evidence.network.genesis_hash,
+        "evmAncestryEvidence.network.genesisHash",
+    )?;
+    if evidence.checkpoint.height == 0 {
+        return Err(VerifyError::InvalidField(
+            "evmAncestryEvidence.checkpoint.height",
+        ));
+    }
+    hash32(
+        &evidence.checkpoint.block_hash,
+        "evmAncestryEvidence.checkpoint.blockHash",
+    )?;
+    hash32(
+        &evidence.checkpoint.state_root,
+        "evmAncestryEvidence.checkpoint.stateRoot",
+    )?;
+    if evidence.finalized.height <= evidence.checkpoint.height {
+        return Err(VerifyError::InvalidField(
+            "evmAncestryEvidence.finalized.height",
+        ));
+    }
+    hash32(
+        &evidence.finalized.block_hash,
+        "evmAncestryEvidence.finalized.blockHash",
+    )?;
+    hash32(
+        &evidence.finalized.state_root,
+        "evmAncestryEvidence.finalized.stateRoot",
+    )?;
+
+    let height_span = evidence
+        .finalized
+        .height
+        .checked_sub(evidence.checkpoint.height)
+        .and_then(|span| span.checked_add(1))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or(VerifyError::InvalidField("evmAncestryEvidence.heightSpan"))?;
+    if evidence.headers.len() != height_span
+        || evidence.headers.len() < 2
+        || evidence.headers.len() > MAX_ANCESTRY_HEADERS
+    {
+        return Err(VerifyError::InvalidField("evmAncestryEvidence.headers"));
+    }
+
+    let mut hashes = BTreeSet::new();
+    for (index, header) in evidence.headers.iter().enumerate() {
+        let offset = u64::try_from(index)
+            .map_err(|_| VerifyError::InvalidField("evmAncestryEvidence.header.height"))?;
+        let expected_height =
+            evidence
+                .checkpoint
+                .height
+                .checked_add(offset)
+                .ok_or(VerifyError::InvalidField(
+                    "evmAncestryEvidence.header.height",
+                ))?;
+        if header.height != expected_height {
+            return Err(VerifyError::InvalidField(
+                "evmAncestryEvidence.header.height",
+            ));
+        }
+        hash32(&header.block_hash, "evmAncestryEvidence.header.blockHash")?;
+        hash32(&header.parent_hash, "evmAncestryEvidence.header.parentHash")?;
+        hash32(&header.state_root, "evmAncestryEvidence.header.stateRoot")?;
+        if header.block_hash == header.parent_hash || !hashes.insert(header.block_hash.as_str()) {
+            return Err(VerifyError::InvalidField(
+                "evmAncestryEvidence.header.blockHash",
+            ));
+        }
+        if index > 0 && header.parent_hash != evidence.headers[index - 1].block_hash {
+            return Err(VerifyError::InvalidField(
+                "evmAncestryEvidence.header.parentHash",
+            ));
+        }
+    }
+
+    let first = &evidence.headers[0];
+    if first.height != evidence.checkpoint.height
+        || first.block_hash != evidence.checkpoint.block_hash
+        || first.state_root != evidence.checkpoint.state_root
+    {
+        return Err(VerifyError::InvalidField("evmAncestryEvidence.checkpoint"));
+    }
+    let last = evidence
+        .headers
+        .last()
+        .ok_or(VerifyError::InvalidField("evmAncestryEvidence.headers"))?;
+    if last.height != evidence.finalized.height
+        || last.block_hash != evidence.finalized.block_hash
+        || last.state_root != evidence.finalized.state_root
+    {
+        return Err(VerifyError::InvalidField("evmAncestryEvidence.finalized"));
+    }
     Ok(())
 }
 
@@ -1026,6 +1323,13 @@ fn decode_hex_array<const N: usize>(
 
 fn hash32(value: &str, field: &'static str) -> Result<(), VerifyError> {
     if !is_lower_hex(value, 32, true) {
+        return Err(VerifyError::InvalidField(field));
+    }
+    Ok(())
+}
+
+fn zero_hash32(value: &str, field: &'static str) -> Result<(), VerifyError> {
+    if !is_lower_hex(value, 32, false) || value.as_bytes()[2..].iter().any(|byte| *byte != b'0') {
         return Err(VerifyError::InvalidField(field));
     }
     Ok(())
@@ -1315,6 +1619,134 @@ mod tests {
         assert!(parse_evm_rpc_capture(&serde_json::to_vec(&capture).unwrap()).is_err());
     }
 
+    #[test]
+    fn evm_capture_refuses_impossible_genesis_and_finalized_headers() {
+        let mut capture = evm_capture();
+        capture["genesisBlock"]["response"]["result"]["parentHash"] =
+            serde_json::json!(format!("0x{}", "8".repeat(64)));
+        assert_eq!(
+            parse_evm_rpc_capture(&serde_json::to_vec(&capture).unwrap()).unwrap_err(),
+            VerifyError::InvalidField("evmRpcCapture.genesisBlock.parentHash")
+        );
+
+        let mut capture = evm_capture();
+        capture["finalizedBlock"]["response"]["result"]["hash"] =
+            capture["genesisBlock"]["response"]["result"]["hash"].clone();
+        assert_eq!(
+            parse_evm_rpc_capture(&serde_json::to_vec(&capture).unwrap()).unwrap_err(),
+            VerifyError::InvalidField("evmRpcCapture.finalizedBlock")
+        );
+    }
+
+    #[test]
+    fn evm_ancestry_verifies_contiguous_parent_links_without_claiming_finality() {
+        let evidence = evm_ancestry_evidence();
+        let bytes = serde_json::to_vec(&evidence).unwrap();
+        let parsed = parse_evm_ancestry_evidence(&bytes).unwrap();
+        let report = verify_evm_ancestry_evidence(&parsed).unwrap();
+        assert_eq!(report.header_count, 3);
+        assert!(report.contiguous_heights);
+        assert!(report.parent_hash_linkage_verified);
+        assert!(report.endpoints_matched);
+        assert!(!report.consensus_finality_authenticated);
+        assert!(!report.production_qualified);
+    }
+
+    #[test]
+    fn evm_ancestry_refuses_gap_broken_link_and_endpoint_substitution() {
+        let mut gap = evm_ancestry_evidence();
+        gap.headers[1].height += 1;
+        assert_eq!(
+            verify_evm_ancestry_evidence(&gap).unwrap_err(),
+            VerifyError::InvalidField("evmAncestryEvidence.header.height")
+        );
+
+        let mut broken = evm_ancestry_evidence();
+        broken.headers[2].parent_hash = format!("0x{}", "9".repeat(64));
+        assert_eq!(
+            verify_evm_ancestry_evidence(&broken).unwrap_err(),
+            VerifyError::InvalidField("evmAncestryEvidence.header.parentHash")
+        );
+
+        let mut substituted = evm_ancestry_evidence();
+        substituted.finalized.block_hash = format!("0x{}", "8".repeat(64));
+        assert_eq!(
+            verify_evm_ancestry_evidence(&substituted).unwrap_err(),
+            VerifyError::InvalidField("evmAncestryEvidence.finalized")
+        );
+    }
+
+    #[test]
+    fn evm_ancestry_refuses_trivial_or_oversized_claims_and_unknown_fields() {
+        let mut trivial = evm_ancestry_evidence();
+        trivial.finalized.height = trivial.checkpoint.height;
+        assert_eq!(
+            verify_evm_ancestry_evidence(&trivial).unwrap_err(),
+            VerifyError::InvalidField("evmAncestryEvidence.finalized.height")
+        );
+
+        let mut value = serde_json::to_value(evm_ancestry_evidence()).unwrap();
+        value["consensusFinalized"] = serde_json::Value::Bool(true);
+        assert!(matches!(
+            parse_evm_ancestry_evidence(&serde_json::to_vec(&value).unwrap()),
+            Err(VerifyError::InvalidJson(_))
+        ));
+
+        let mut oversized = evm_ancestry_evidence();
+        oversized.finalized.height = oversized.checkpoint.height + MAX_ANCESTRY_HEADERS as u64;
+        oversized.headers = vec![oversized.headers[0].clone(); MAX_ANCESTRY_HEADERS + 1];
+        assert_eq!(
+            verify_evm_ancestry_evidence(&oversized).unwrap_err(),
+            VerifyError::InvalidField("evmAncestryEvidence.headers")
+        );
+    }
+
+    fn evm_ancestry_evidence() -> EvmAncestryEvidence {
+        let checkpoint_hash = format!("0x{}", "5".repeat(64));
+        let middle_hash = format!("0x{}", "6".repeat(64));
+        let finalized_hash = format!("0x{}", "7".repeat(64));
+        let checkpoint_root = format!("0x{}", "a".repeat(64));
+        let finalized_root = format!("0x{}", "c".repeat(64));
+        EvmAncestryEvidence {
+            schema: EVM_ANCESTRY_EVIDENCE_SCHEMA.into(),
+            network: NetworkIdentity {
+                network: "bloch-l2".into(),
+                chain_id: 700_771,
+                genesis_hash: format!("0x{}", "3".repeat(64)),
+            },
+            checkpoint: Checkpoint {
+                height: 40,
+                block_hash: checkpoint_hash.clone(),
+                state_root: checkpoint_root.clone(),
+            },
+            finalized: EvmBlockReference {
+                height: 42,
+                block_hash: finalized_hash.clone(),
+                state_root: finalized_root.clone(),
+            },
+            headers: vec![
+                EvmAncestryHeader {
+                    height: 40,
+                    block_hash: checkpoint_hash,
+                    parent_hash: format!("0x{}", "4".repeat(64)),
+                    state_root: checkpoint_root,
+                },
+                EvmAncestryHeader {
+                    height: 41,
+                    block_hash: middle_hash.clone(),
+                    parent_hash: format!("0x{}", "5".repeat(64)),
+                    state_root: format!("0x{}", "b".repeat(64)),
+                },
+                EvmAncestryHeader {
+                    height: 42,
+                    block_hash: finalized_hash,
+                    parent_hash: middle_hash,
+                    state_root: finalized_root,
+                },
+            ],
+        }
+    }
+
     fn evm_capture() -> serde_json::Value {
         fn exchange(
             id: u64,
@@ -1350,5 +1782,21 @@ mod tests {
                 "stateRoot": format!("0x{}", "7".repeat(64))
             }))
         })
+    }
+
+    #[test]
+    fn duplicate_json_keys_are_refused_at_every_depth() {
+        let duplicate_top_level = br#"{"schema":"bloch.verify.evm-rpc-capture.v1","schema":"bloch.verify.evm-rpc-capture.v1"}"#;
+        assert!(matches!(
+            parse_evm_rpc_capture(duplicate_top_level),
+            Err(VerifyError::InvalidJson(message)) if message.contains("duplicate JSON object key")
+        ));
+
+        let duplicate_nested =
+            br#"[{"jsonrpc":"2.0","id":1,"result":{"hash":"first","hash":"second"}}]"#;
+        assert!(matches!(
+            parse_json_rpc_responses(duplicate_nested),
+            Err(VerifyError::InvalidJson(message)) if message.contains("duplicate JSON object key")
+        ));
     }
 }

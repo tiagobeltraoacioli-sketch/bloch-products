@@ -1,0 +1,38 @@
+{
+  "schema": "bloch.verify.evm-ancestry-evidence.v1",
+  "network": {
+    "network": "bloch-l2",
+    "chainId": 700771,
+    "genesisHash": "0x3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "checkpoint": {
+    "height": 40,
+    "blockHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+    "stateRoot": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "finalized": {
+    "height": 42,
+    "blockHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "stateRoot": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "headers": [
+    {
+      "height": 40,
+      "blockHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "parentHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+      "stateRoot": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "height": 41,
+      "blockHash": "0x6666666666666666666666666666666666666666666666666666666666666666",
+      "parentHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "stateRoot": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "height": 42,
+      "blockHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+      "parentHash": "0x6666666666666666666666666666666666666666666666666666666666666666",
+      "stateRoot": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ]
+}
