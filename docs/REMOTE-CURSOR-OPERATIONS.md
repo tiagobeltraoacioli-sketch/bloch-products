@@ -83,6 +83,15 @@ receipt without importing it. The CLI's manual-time receipt import is ceremony
 only and cannot satisfy the production trusted-time gate. Verified quorum
 reports can be retained in a monotonic single-host store which rejects local
 rollback/equivocation, but host or VM snapshot rollback remains undetectable.
+The authenticated CAS session requires the opaque verified caller
+authorization, sends its canonical bytes in a nonce-bound exact exchange and
+releases a capability only after verifying the matching threshold-signed
+receipt. A crash-safe hash-chained journal can retain that capability and reject
+malformed chains, replay conflicts and generation equivocation. Writer fencing
+certificates bind an epoch to the same state and CAS audiences and must advance
+an independently retained floor before use. The authoritative CAS service
+still has to enforce that lease; the library neither issues leases nor persists
+the floor.
 Challenge transport, snapshot-resistant replay tracking, external signer
 custody and a replicated linearizable challenge/CAS service remain external.
 The reference core returns unsigned decision material and is not a network

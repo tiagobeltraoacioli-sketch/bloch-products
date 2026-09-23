@@ -53,8 +53,26 @@ Files:
   install relationships and unreviewed directives.
 - `test-authenticated-admission-spec.sh`: positive and adversarial temporary
   fixtures for the authenticated-admission specification verifier.
+- `systemd-fetch-spec/`: non-installable specification/check artifacts for the
+  future networked Data/Pay fetch side. They fix dedicated fetch UIDs, exact
+  policy and mTLS handle credentials, a boot-scoped output path, no access to
+  product state, cursor or peer material, bounded resources and only
+  `AF_UNIX`/`AF_INET`/`AF_INET6`. They use `/usr/bin/false`, have no dependencies or
+  `[Install]` section and are never deployment units.
+- `verify-authenticated-fetch-spec.sh`: exact file/directive/credential/path
+  verifier. It rejects raw private-key credential names, cross-product access,
+  state writes, aliases, install relationships and synthetic dependencies.
+- `test-authenticated-fetch-spec.sh`: adversarial fixtures for the fetch-side
+  specification verifier.
 
 This synthetic-pilot bundle does not yet authenticate the staged root through
 `bloch-local-state-checkpoint` or a remote monotonic cursor. It provides no
 encryption, key management, backup, replication, high availability, custody,
 settlement, regulatory approval or production admission.
+
+The fetch specification does not provide a network client or firewall policy.
+Because endpoint DNS names and pins live in the authenticated transport policy,
+the static unit cannot safely synthesize IP allowlists. A target-host adapter
+must still prove live TLS 1.3/mTLS negotiation, certificate/SPKI handling,
+revocation behavior, endpoint routing and HSM/key-handle integration before a
+real unit can replace these check-only artifacts.

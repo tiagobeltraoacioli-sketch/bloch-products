@@ -141,6 +141,11 @@ identity, prove finality, activate a network, or authorize asset movement.
   an in-memory CSPRNG nonce, exact request/response byte binding, monotonic
   deadline and opaque verified response. The callback still must provide the
   qualified live TLS adapter and truthful handshake evidence.
+- `bloch-local-state-remote-cursor-cas-session`: exact authenticated CAS
+  exchange requiring a fresh threshold caller authorization and returning an
+  opaque capability only after the signed receipt matches the canonical
+  request. The transport callback remains external and the result does not
+  prove service linearizability.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   fresh trusted time and an optional independently retained external anchor to
   the one-shot remote session and coordinated semantic admission, without
@@ -175,6 +180,14 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-local-state-remote-cursor-quorum-report-store`: crash-safe monotonic
   single-host retention accepting only opaque verified quorum capabilities. It
   detects local rollback/equivocation but is not consensus or snapshot-proof.
+- `bloch-local-state-remote-cursor-cas-audit-journal`: crash-safe, hash-chained
+  single-host retention of verified authenticated CAS sessions. It rejects
+  malformed chains, request replay conflicts and generation equivocation, but
+  is not WORM storage and cannot detect a valid older host or VM snapshot.
+- `bloch-local-state-writer-fencing`: canonical threshold-signed writer leases
+  bound to state, remote-cursor and CAS audiences, checked against trusted time
+  and an independently retained epoch floor. It verifies certificates; it
+  neither elects a writer nor provides consensus or the independent floor.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.

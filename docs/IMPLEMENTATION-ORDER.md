@@ -69,8 +69,14 @@ will follow working implementations and retained evidence.
    absolute-time-bounded replica comparison verifier also exist. A bounded
    collector now acquires every configured replica with a distinct nonce and
    returns only a verified quorum. A single-host crash-safe report store accepts
-   only that opaque capability and rejects local rollback/equivocation; none of
-   these supplies signer custody, consensus, snapshot resistance or fencing. A canonical
+   only that opaque capability and rejects local rollback/equivocation. An
+   exact authenticated CAS session now composes verified caller authorization,
+   transport evidence and signed decision receipts, and a hash-chained
+   single-host journal retains only that opaque result. Threshold-signed writer
+   fencing certificates are also verified against trusted time and an
+   independently supplied epoch floor. None of these supplies signer custody,
+   consensus, snapshot resistance, a linearizable lease issuer or the durable
+   independent floor. A canonical
    external-anchor protocol is now composed into optional Data/Pay startup and
    can authenticate an independently retained monotonic generation and time
    boundary, but does not provide the TPM/WORM/remote counter itself. Canonical

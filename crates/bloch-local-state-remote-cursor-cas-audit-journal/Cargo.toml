@@ -1,0 +1,25 @@
+[package]
+name = "bloch-local-state-remote-cursor-cas-audit-journal"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-authenticated-transport-evidence = { path = "../bloch-authenticated-transport-evidence" }
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-local-state-remote-cursor-cas-session = { path = "../bloch-local-state-remote-cursor-cas-session" }
+getrandom = "0.2.17"
+hex.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-authenticated-transport-session = { path = "../bloch-authenticated-transport-session" }
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-remote-cursor-caller-auth = { path = "../bloch-local-state-remote-cursor-caller-auth" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
+ed25519-dalek.workspace = true

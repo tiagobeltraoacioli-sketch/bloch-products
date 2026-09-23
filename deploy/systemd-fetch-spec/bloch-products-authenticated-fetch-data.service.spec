@@ -1,0 +1,55 @@
+# SPECIFICATION/CHECK ARTIFACT ONLY. This is not an installable production unit.
+[Unit]
+Description=Bloch Data authenticated fetch specification (never deploy)
+X-Bloch-Artifact=specification-check-only
+
+[Service]
+Type=oneshot
+User=bloch-data-fetch
+Group=bloch-data-fetch
+UMask=0077
+LoadCredential=transport-policy:/etc/bloch-products/trust/data/transport-policy
+LoadCredential=transport-policy-pin:/etc/bloch-products/trust/data/transport-policy-pin
+LoadCredential=remote-policy:/etc/bloch-products/trust/data/remote-policy
+LoadCredential=remote-policy-pin:/etc/bloch-products/trust/data/remote-policy-pin
+LoadCredential=trusted-time-policy:/etc/bloch-products/trust/data/trusted-time-policy
+LoadCredential=trusted-time-policy-pin:/etc/bloch-products/trust/data/trusted-time-policy-pin
+LoadCredential=external-anchor-policy:/etc/bloch-products/trust/data/external-anchor-policy
+LoadCredential=external-anchor-policy-pin:/etc/bloch-products/trust/data/external-anchor-policy-pin
+LoadCredential=mtls-client-certificate:/etc/bloch-products/trust/data/mtls-client-certificate
+LoadCredential=mtls-client-key-handle:/etc/bloch-products/trust/data/mtls-client-key-handle
+ExecStart=/usr/bin/false
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateNetwork=no
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/etc/bloch-products/trust/data
+ReadWritePaths=/run/bloch-products-fetch/data
+InaccessiblePaths=/var/lib/bloch-products /run/bloch-products/data /run/bloch-products/pay /etc/bloch-products/trust/pay /run/bloch-products-fetch/pay
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+SystemCallArchitectures=native
+CPUQuota=20%
+MemoryHigh=192M
+MemoryMax=384M
+TasksMax=24
+LimitNOFILE=64
+LimitFSIZE=16M
+IOWeight=10
+OOMPolicy=stop

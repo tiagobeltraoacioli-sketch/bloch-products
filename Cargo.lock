@@ -322,6 +322,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-remote-cursor-cas-audit-journal"
+version = "0.1.0"
+dependencies = [
+ "bloch-authenticated-transport-evidence",
+ "bloch-authenticated-transport-session",
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-caller-auth",
+ "bloch-local-state-remote-cursor-cas-session",
+ "bloch-local-state-store",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-remote-cursor-cas-session"
+version = "0.1.0"
+dependencies = [
+ "bloch-authenticated-transport-evidence",
+ "bloch-authenticated-transport-session",
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-caller-auth",
+ "bloch-local-state-store",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-remote-cursor-challenge-store"
 version = "0.1.0"
 dependencies = [
@@ -487,6 +528,19 @@ dependencies = [
  "getrandom",
  "hex",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-writer-fencing"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
  "serde",
  "serde_json",
  "sha2",

@@ -1,0 +1,55 @@
+# SPECIFICATION/CHECK ARTIFACT ONLY. This is not an installable production unit.
+[Unit]
+Description=Bloch Pay authenticated fetch specification (never deploy)
+X-Bloch-Artifact=specification-check-only
+
+[Service]
+Type=oneshot
+User=bloch-pay-fetch
+Group=bloch-pay-fetch
+UMask=0077
+LoadCredential=transport-policy:/etc/bloch-products/trust/pay/transport-policy
+LoadCredential=transport-policy-pin:/etc/bloch-products/trust/pay/transport-policy-pin
+LoadCredential=remote-policy:/etc/bloch-products/trust/pay/remote-policy
+LoadCredential=remote-policy-pin:/etc/bloch-products/trust/pay/remote-policy-pin
+LoadCredential=trusted-time-policy:/etc/bloch-products/trust/pay/trusted-time-policy
+LoadCredential=trusted-time-policy-pin:/etc/bloch-products/trust/pay/trusted-time-policy-pin
+LoadCredential=external-anchor-policy:/etc/bloch-products/trust/pay/external-anchor-policy
+LoadCredential=external-anchor-policy-pin:/etc/bloch-products/trust/pay/external-anchor-policy-pin
+LoadCredential=mtls-client-certificate:/etc/bloch-products/trust/pay/mtls-client-certificate
+LoadCredential=mtls-client-key-handle:/etc/bloch-products/trust/pay/mtls-client-key-handle
+ExecStart=/usr/bin/false
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateNetwork=no
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/etc/bloch-products/trust/pay
+ReadWritePaths=/run/bloch-products-fetch/pay
+InaccessiblePaths=/var/lib/bloch-products /run/bloch-products/data /run/bloch-products/pay /etc/bloch-products/trust/data /run/bloch-products-fetch/data
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+SystemCallArchitectures=native
+CPUQuota=20%
+MemoryHigh=192M
+MemoryMax=384M
+TasksMax=24
+LimitNOFILE=64
+LimitFSIZE=16M
+IOWeight=10
+OOMPolicy=stop
