@@ -67,8 +67,10 @@ evidence proves the remote CAS did not accept the candidate.
 The repository now defines authenticated cursor observation, canonical signed
 CAS requests and receipts, and an explicitly provisioned durable single-host
 reference CAS core. The core now requires an exact threshold caller
-authorization capability before mutation, but fresh authorization challenges
-and replay tracking remain external. It returns unsigned decision material and
+authorization verified with audience-bound trusted time and upgraded only after
+an explicitly provisioned single-host store durably consumes its exact fresh
+challenge. Challenge transport, snapshot-resistant replay tracking and a
+replicated challenge service remain external. It returns unsigned decision material and
 is not a network service, signing authority or replicated linearizable service.
 Therefore this sequence remains an
 implementation contract, not deployment evidence, and production activation

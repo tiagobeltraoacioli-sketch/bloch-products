@@ -8,9 +8,12 @@ use bloch_local_state_remote_cursor::{
 };
 use bloch_local_state_remote_cursor_caller_auth::{
     CALLER_AUTH_POLICY_SCHEMA, CallerAuthority, CallerAuthorizationPolicy, CallerSignature,
-    VerifiedRemoteCursorCasCallerAuthorization, caller_authorization_policy_sha256,
-    caller_authorization_signature_message, create_caller_authorization,
-    verify_caller_authorization,
+    ReplayProtectedRemoteCursorCasCallerAuthorization, bind_consumed_challenge,
+    caller_authorization_policy_sha256, caller_authorization_signature_message,
+    create_caller_authorization, verify_caller_authorization,
+};
+use bloch_local_state_remote_cursor_challenge_store::{
+    ChallengeAudience, consume_challenge, issue_challenge, provision_challenge_store,
 };
 use bloch_local_state_remote_cursor_control_plane::{
     ControlPlaneError, apply_request, load_current_cursor, provision_control_plane_store,
@@ -26,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const IDENTITY: &str = "data:tenant-a:lifecycle";
 const NONCE: &str = "control_plane_nonce_0123456789abcdef0123456789abcdef";
@@ -189,7 +192,7 @@ fn exact_caller_capability_is_required_before_mutation() {
     fs::write(&stale, b"untrusted-leftover").unwrap();
     fs::set_permissions(&stale, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &substituted, &capability),
+        apply_request(&control.0, IDENTITY, &substituted, capability),
         Err(ControlPlaneError::CallerAuthorizationMismatch)
     ));
     assert!(
@@ -219,7 +222,7 @@ fn expired_monotonic_capability_cannot_mutate() {
     let capability = caller_authorization_at(&request, 249);
     std::thread::sleep(std::time::Duration::from_millis(1_100));
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &request, &capability),
+        apply_request(&control.0, IDENTITY, &request, capability),
         Err(ControlPlaneError::CallerAuthorizationExpired)
     ));
     assert_eq!(
@@ -532,23 +535,31 @@ fn authorized_apply(
 ) -> Result<bloch_local_state_remote_cursor_control_plane::ControlPlaneDecision, ControlPlaneError>
 {
     let authorization = caller_authorization(request);
-    apply_request(store, IDENTITY, request, &authorization)
+    apply_request(store, IDENTITY, request, authorization)
 }
 
 fn caller_authorization(
     request: &ValidatedRemoteCursorCasRequest,
-) -> VerifiedRemoteCursorCasCallerAuthorization {
+) -> ReplayProtectedRemoteCursorCasCallerAuthorization {
     caller_authorization_at(request, 225)
 }
 
 fn caller_authorization_at(
     request: &ValidatedRemoteCursorCasRequest,
     evaluated_at_unix_seconds: u64,
-) -> VerifiedRemoteCursorCasCallerAuthorization {
-    const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+) -> ReplayProtectedRemoteCursorCasCallerAuthorization {
     let (policy, keys, pin) = caller_material(request.remote_cursor_policy_sha256());
+    let challenge_store = Temp::new("caller-challenge");
+    provision_challenge_store(&challenge_store.0).unwrap();
+    let audience = ChallengeAudience {
+        caller_policy_sha256: &pin,
+        remote_cursor_policy_sha256: request.remote_cursor_policy_sha256(),
+        state_identity: IDENTITY,
+    };
+    let issued = issue_challenge(&challenge_store.0, audience, Duration::from_secs(10)).unwrap();
+    let nonce = issued.nonce().to_owned();
     let message =
-        caller_authorization_signature_message(request, &policy, &pin, NONCE, 200, 250).unwrap();
+        caller_authorization_signature_message(request, &policy, &pin, &nonce, 200, 250).unwrap();
     let signatures = keys
         .iter()
         .enumerate()
@@ -558,14 +569,16 @@ fn caller_authorization_at(
         })
         .collect::<Vec<_>>();
     let bytes =
-        create_caller_authorization(request, &policy, &pin, NONCE, 200, 250, &signatures).unwrap();
-    verify_caller_authorization(
+        create_caller_authorization(request, &policy, &pin, &nonce, 200, 250, &signatures).unwrap();
+    let verified = verify_caller_authorization(
         &bytes,
         request,
         &policy,
         &pin,
-        NONCE,
+        &nonce,
         evaluated_at_unix_seconds,
     )
-    .unwrap()
+    .unwrap();
+    let consumed = consume_challenge(&challenge_store.0, audience, issued, &nonce).unwrap();
+    bind_consumed_challenge(verified, consumed).unwrap()
 }

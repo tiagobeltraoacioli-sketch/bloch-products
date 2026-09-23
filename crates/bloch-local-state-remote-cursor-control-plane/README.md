@@ -10,7 +10,8 @@ directory `fsync` and readback.
 Provisioning is an explicit, one-time operation through
 `provision_control_plane_store` and binds the state identity, remote policy
 pin, signature domain and caller-authorization policy pin to that store. Every
-mutation requires a fresh opaque threshold authorization for the exact request.
+mutation consumes a fresh, non-cloneable opaque threshold authorization for the
+exact request after its matching challenge was durably consumed.
 Normal `apply_request` and read paths never
 create a directory, lock, or state file. A typo or deletion during ordinary
 operation thus fails closed and cannot silently become a new empty epoch
@@ -27,8 +28,9 @@ The request history is deliberately bounded. Once full, new IDs fail rather
 than evicting old idempotency records. Operators must provision a new qualified
 epoch/store rather than silently losing replay protection.
 
-This crate performs no networking, caller-challenge issuance, signing, private
-key handling, replication, quorum consensus or high availability. Its returned
+This crate performs no networking, challenge transport, signing, private key
+handling, replication, quorum consensus or high availability. Challenge
+issuance/consumption is a separate single-host reference crate. Its returned
 decision is unsigned material for independent authorities; it never fabricates
 a signed receipt and does not prove authority independence. The single-host
 filesystem implementation is a reference core, not a claim of remote durable

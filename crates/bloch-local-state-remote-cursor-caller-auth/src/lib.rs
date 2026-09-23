@@ -6,6 +6,8 @@
 //! identity.
 
 use bloch_local_state_remote_cursor::ValidatedRemoteCursorCasRequest;
+use bloch_local_state_remote_cursor_challenge_store::ConsumedCasChallenge;
+use bloch_trusted_time::VerifiedTrustedTime;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -77,7 +79,7 @@ struct Authorization {
 }
 
 /// Opaque proof that a threshold authorized one exact canonical CAS request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct VerifiedRemoteCursorCasCallerAuthorization {
     caller_policy_sha256: String,
     remote_cursor_policy_sha256: String,
@@ -139,6 +141,41 @@ impl VerifiedRemoteCursorCasCallerAuthorization {
     }
 }
 
+/// Linear proof that an authenticated CAS request also consumed its exact
+/// server-issued challenge durably.
+#[derive(Debug)]
+pub struct ReplayProtectedRemoteCursorCasCallerAuthorization {
+    authorization: VerifiedRemoteCursorCasCallerAuthorization,
+    challenge: ConsumedCasChallenge,
+}
+
+impl ReplayProtectedRemoteCursorCasCallerAuthorization {
+    pub fn caller_policy_sha256(&self) -> &str {
+        self.authorization.caller_policy_sha256()
+    }
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        self.authorization.remote_cursor_policy_sha256()
+    }
+    pub fn state_identity(&self) -> &str {
+        self.authorization.state_identity()
+    }
+    pub fn request_sha256(&self) -> &str {
+        self.authorization.request_sha256()
+    }
+    pub fn canonical_request(&self) -> &[u8] {
+        self.authorization.canonical_request()
+    }
+    pub fn challenge_consumption_sha256(&self) -> &str {
+        self.challenge.consumption_sha256()
+    }
+    pub fn ensure_monotonic_freshness(&self) -> Result<(), CallerAuthorizationError> {
+        self.authorization.ensure_monotonic_freshness()?;
+        self.challenge
+            .ensure_monotonic_freshness()
+            .map_err(|_| CallerAuthorizationError::ChallengeExpired)
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CallerAuthorizationError {
     #[error("caller authorization policy is invalid")]
@@ -149,8 +186,14 @@ pub enum CallerAuthorizationError {
     InvalidAuthorization,
     #[error("caller authorization does not bind the expected request")]
     RequestMismatch,
+    #[error("trusted-time capability does not bind the authorization audience")]
+    TrustedTimeAudienceMismatch,
     #[error("caller authorization nonce does not match")]
     NonceMismatch,
+    #[error("consumed challenge does not bind the verified authorization")]
+    ChallengeMismatch,
+    #[error("consumed challenge monotonic deadline has expired")]
+    ChallengeExpired,
     #[error("caller authorization is outside its validity or freshness window")]
     OutsideFreshnessWindow,
     #[error("caller authorization signature threshold is not met")]
@@ -247,6 +290,9 @@ pub fn create_caller_authorization(
     Ok(bytes)
 }
 
+/// Compatibility verifier for callers which already possess a qualified wall
+/// clock. Production compositions should prefer
+/// [`verify_caller_authorization_with_trusted_time`].
 pub fn verify_caller_authorization(
     authorization_bytes: &[u8],
     expected_request: &ValidatedRemoteCursorCasRequest,
@@ -323,6 +369,64 @@ pub fn verify_caller_authorization(
             .collect(),
         authorization_sha256: hash(authorization_bytes),
         monotonic_deadline,
+    })
+}
+
+/// Verifies an authorization using only the time supplied by an opaque,
+/// audience-bound trusted-time capability.
+///
+/// This entry point accepts no operator-provided wall-clock value. The time
+/// capability must bind the same state identity and remote-cursor policy as
+/// the exact CAS request and caller policy.
+pub fn verify_caller_authorization_with_trusted_time(
+    authorization_bytes: &[u8],
+    expected_request: &ValidatedRemoteCursorCasRequest,
+    policy: &CallerAuthorizationPolicy,
+    expected_policy_sha256: &str,
+    expected_authorization_nonce: &str,
+    trusted_time: &VerifiedTrustedTime,
+) -> Result<VerifiedRemoteCursorCasCallerAuthorization, CallerAuthorizationError> {
+    if trusted_time.state_identity() != expected_request.state_identity()
+        || trusted_time.remote_cursor_policy_sha256()
+            != expected_request.remote_cursor_policy_sha256()
+        || policy.state_identity != expected_request.state_identity()
+        || policy.remote_cursor_policy_sha256 != expected_request.remote_cursor_policy_sha256()
+    {
+        return Err(CallerAuthorizationError::TrustedTimeAudienceMismatch);
+    }
+    let evaluated_at = trusted_time
+        .unix_seconds()
+        .map_err(|_| CallerAuthorizationError::OutsideFreshnessWindow)?;
+    verify_caller_authorization(
+        authorization_bytes,
+        expected_request,
+        policy,
+        expected_policy_sha256,
+        expected_authorization_nonce,
+        evaluated_at,
+    )
+}
+
+/// Consumes both linear capabilities and returns the only authorization type
+/// accepted by the reference control plane.
+pub fn bind_consumed_challenge(
+    authorization: VerifiedRemoteCursorCasCallerAuthorization,
+    challenge: ConsumedCasChallenge,
+) -> Result<ReplayProtectedRemoteCursorCasCallerAuthorization, CallerAuthorizationError> {
+    authorization.ensure_monotonic_freshness()?;
+    challenge
+        .ensure_monotonic_freshness()
+        .map_err(|_| CallerAuthorizationError::ChallengeExpired)?;
+    if authorization.authorization_nonce() != challenge.nonce()
+        || authorization.caller_policy_sha256() != challenge.caller_policy_sha256()
+        || authorization.remote_cursor_policy_sha256() != challenge.remote_cursor_policy_sha256()
+        || authorization.state_identity() != challenge.state_identity()
+    {
+        return Err(CallerAuthorizationError::ChallengeMismatch);
+    }
+    Ok(ReplayProtectedRemoteCursorCasCallerAuthorization {
+        authorization,
+        challenge,
     })
 }
 

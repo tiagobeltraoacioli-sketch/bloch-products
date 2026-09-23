@@ -7,10 +7,11 @@ cursor protocol, memory-only fetch session, local coordination, semantic
 admission, transition/recovery composition, single-host CAS reference core and
 re-bootstrap tools exist as building blocks. Audience-bound threshold trusted
 time, fresh bounded acquisition, a single-host monotonic-boundary reference
-store and bounded cursor ingress also exist. A qualified network transport,
-independent rollback-resistant time root, replicated remote service, authority
-signing boundary and production systemd composition are not deployed or
-qualified.
+store, an external-anchor verification protocol, bounded cursor ingress and a
+single-host one-time CAS challenge store also exist. A qualified network
+transport, independent rollback-resistant root, replicated remote service,
+authority signing boundary and production systemd composition are not deployed
+or qualified.
 
 The existing `bloch-products-synthetic-store-check@.service` is
 **synthetic-only**. It checks a locally staged root with the generic store
@@ -227,12 +228,12 @@ require a separate authority-approved recovery or re-genesis ceremony.
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
 | P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition and negative tests exist; qualified transport/systemd integration evidence remains |
-| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition and a single-host monotonic store exist; independent anti-rollback root, suspend/resume qualification and host tests remain |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core, exact threshold caller authorization and concurrency tests exist; replicated service, fresh challenge service, external decision signing and operational qualification remain |
+| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition, single-host monotonic store and external-anchor verifier exist; independently operated anti-rollback retention, suspend/resume qualification and host tests remain |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core, durable one-time challenges, trusted-time authorization and concurrency tests exist; replicated challenge/CAS service, external decision signing and operational qualification remain |
 | P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
 | P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed, has no install relationship and CI rejects production-target dependencies/aliases; target-host composition evidence remains |
-| P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations exist; host manifest, unit verification and ownership checks remain |
-| P1 | Exact credential names and provenance | **Partial** | Fixed CLI credential names exist; systemd integration tests and arbitrary-name rejection remain |
+| P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations and non-installable checked Data/Pay unit specifications exist; target-host UID, unit and ownership evidence remains |
+| P1 | Exact credential names and provenance | **Partial** | Exact Data/Pay specification manifests and adversarial static tests exist; real systemd credential integration and target-host evidence remain |
 | P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session and bounded-ingress tests exist; qualified adapter, repeated-start, reboot and transport-failure evidence remain |
 | P1 | Explicit Data/Pay state-identity mapping | **Partial** | Library cross-identity tests exist; deployed cross-product/cross-tenant evidence remains |
 | P1 | Re-bootstrap maintenance and installation runbook | **Partial** | Fencing/install drill and independently retained evidence |

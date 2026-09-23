@@ -22,4 +22,6 @@ jobs:
       - run: find deploy -type f -name '*.sh' -exec sh -n '{}' +
       - run: deploy/verify-unit-separation.sh
       - run: deploy/test-unit-separation.sh
+      - run: deploy/verify-authenticated-admission-spec.sh
+      - run: deploy/test-authenticated-admission-spec.sh
       - run: jq empty products/portfolio.json

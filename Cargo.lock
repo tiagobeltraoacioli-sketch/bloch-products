@@ -283,9 +283,23 @@ version = "0.1.0"
 dependencies = [
  "bloch-local-state-cursor",
  "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-challenge-store",
  "bloch-local-state-store",
+ "bloch-trusted-time",
  "ed25519-dalek",
  "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-remote-cursor-challenge-store"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -299,6 +313,7 @@ dependencies = [
  "bloch-local-state-cursor",
  "bloch-local-state-remote-cursor",
  "bloch-local-state-remote-cursor-caller-auth",
+ "bloch-local-state-remote-cursor-challenge-store",
  "bloch-local-state-store",
  "ed25519-dalek",
  "getrandom",
@@ -439,6 +454,19 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-trusted-time-external-anchor"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 

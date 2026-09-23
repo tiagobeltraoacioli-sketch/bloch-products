@@ -8,7 +8,7 @@ use bloch_local_state_cursor::{CheckpointCursor, parse_cursor};
 use bloch_local_state_remote_cursor::{
     RemoteCursorCasDecision, RemoteCursorCasMode, ValidatedRemoteCursorCasRequest,
 };
-use bloch_local_state_remote_cursor_caller_auth::VerifiedRemoteCursorCasCallerAuthorization;
+use bloch_local_state_remote_cursor_caller_auth::ReplayProtectedRemoteCursorCasCallerAuthorization;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::fs::{File, Metadata, OpenOptions};
@@ -184,7 +184,7 @@ pub fn apply_request(
     store: &Path,
     expected_state_identity: &str,
     request: &ValidatedRemoteCursorCasRequest,
-    authorization: &VerifiedRemoteCursorCasCallerAuthorization,
+    authorization: ReplayProtectedRemoteCursorCasCallerAuthorization,
 ) -> Result<ControlPlaneDecision, ControlPlaneError> {
     if !valid_id(expected_state_identity) || request.state_identity() != expected_state_identity {
         return Err(ControlPlaneError::InvalidInput);
@@ -289,7 +289,7 @@ pub fn apply_request(
     _store: &Path,
     _expected_state_identity: &str,
     _request: &ValidatedRemoteCursorCasRequest,
-    _authorization: &VerifiedRemoteCursorCasCallerAuthorization,
+    _authorization: ReplayProtectedRemoteCursorCasCallerAuthorization,
 ) -> Result<ControlPlaneDecision, ControlPlaneError> {
     Err(ControlPlaneError::UnsupportedPlatform)
 }

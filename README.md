@@ -120,26 +120,32 @@ identity, prove finality, activate a network, or authorize asset movement.
   supplies no network transport itself.
 - `bloch-trusted-time`: canonical nonce-bound threshold Ed25519 time intervals,
   independently pinned and audience-bound to one state identity and remote
-  cursor policy, returned as an opaque monotonic capability. Fetching,
-  rollback-resistant boundary storage and host suspend qualification remain
-  external gates.
+  cursor policy, returned as an opaque monotonic capability. Independent
+  anti-rollback retention and host suspend qualification remain external gates.
 - `bloch-trusted-time-session`: one-shot CSPRNG challenge and bounded,
   deadline-aware token acquisition returning only an authenticated time
   capability; authenticated network delivery remains external.
 - `bloch-trusted-time-boundary-store`: explicitly provisioned Unix reference
   store for durable monotonic time floors, bound to one exact audience. It
   does not detect filesystem, mount, VM or host snapshot rollback.
+- `bloch-trusted-time-external-anchor`: canonical threshold-authenticated
+  external generation/boundary proof checked with trusted time. TPM, WORM or a
+  remote monotonic counter and its independent retention remain external.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   the one-shot remote session to coordinated checkpoint, cursor, store and
   semantic admission without materializing a raw cursor or nonce file.
 - `bloch-local-state-remote-cursor-control-plane`: Unix reference core for
   explicitly provisioned, durable, idempotent and serialized cursor CAS. It
-  requires an exact threshold caller-authorization capability, returns
+  requires an exact replay-protected threshold caller-authorization capability, returns
   unsigned decision material and is not a replicated production service or
   signing authority.
+- `bloch-local-state-remote-cursor-challenge-store`: explicitly provisioned
+  single-host issue/consume store for audience-bound CSPRNG CAS challenges,
+  with linear in-process capabilities and durable one-time consumption.
 - `bloch-local-state-remote-cursor-caller-auth`: canonical pinned threshold
-  authorization for the exact bytes of one CAS request, including identity,
-  remote policy, nonce and validity interval.
+  authorization for the exact bytes of one CAS request, verified with
+  audience-bound trusted time and upgraded only after its challenge is durably
+  consumed.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.

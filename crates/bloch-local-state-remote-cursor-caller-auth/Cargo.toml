@@ -6,6 +6,8 @@ publish.workspace = true
 
 [dependencies]
 bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-local-state-remote-cursor-challenge-store = { path = "../bloch-local-state-remote-cursor-challenge-store" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
 ed25519-dalek.workspace = true
 hex.workspace = true
 serde.workspace = true

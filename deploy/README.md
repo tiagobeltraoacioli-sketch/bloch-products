@@ -40,6 +40,19 @@ Files:
   systemd unit.
 - `test-unit-separation.sh`: adversarial fixtures for dangling legacy names,
   whitespace-obscured install directives, target dependencies and aliases.
+- `systemd-spec/`: non-installable, versioned specification/check artifacts for
+  the future Data and Pay authenticated-admission composition. The manifests
+  fix the dedicated principals, isolated state/cursor/time/coordination paths,
+  exact credential names and sources, offline sandbox, and resource bounds.
+  The `.service.spec` files deliberately use `/usr/bin/false`, have no
+  `[Install]` section or dependencies, and are not production units.
+- `verify-authenticated-admission-spec.sh`: fail-closed canonical relationship
+  check for the two manifests and their service specifications. It rejects a
+  changed file set, aliases/symlinks, missing/extra/duplicate credentials,
+  cross-product UIDs or paths, network access, synthetic dependencies,
+  install relationships and unreviewed directives.
+- `test-authenticated-admission-spec.sh`: positive and adversarial temporary
+  fixtures for the authenticated-admission specification verifier.
 
 This synthetic-pilot bundle does not yet authenticate the staged root through
 `bloch-local-state-checkpoint` or a remote monotonic cursor. It provides no

@@ -16,6 +16,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 bloch-local-state-store = { path = "../bloch-local-state-store" }
+bloch-local-state-remote-cursor-challenge-store = { path = "../bloch-local-state-remote-cursor-challenge-store" }
 ed25519-dalek.workspace = true
 hex.workspace = true
 sha2.workspace = true

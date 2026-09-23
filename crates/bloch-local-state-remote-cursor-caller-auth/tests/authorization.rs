@@ -6,16 +6,25 @@ use bloch_local_state_remote_cursor::{
 };
 use bloch_local_state_remote_cursor_caller_auth::{
     CALLER_AUTH_POLICY_SCHEMA, CallerAuthority, CallerAuthorizationError,
-    CallerAuthorizationPolicy, CallerSignature, caller_authorization_policy_sha256,
-    caller_authorization_signature_message, create_caller_authorization,
-    verify_caller_authorization,
+    CallerAuthorizationPolicy, CallerSignature, bind_consumed_challenge,
+    caller_authorization_policy_sha256, caller_authorization_signature_message,
+    create_caller_authorization, verify_caller_authorization,
+    verify_caller_authorization_with_trusted_time,
+};
+use bloch_local_state_remote_cursor_challenge_store::{
+    ChallengeAudience, consume_challenge, issue_challenge, provision_challenge_store,
 };
 use bloch_local_state_store::write_state;
+use bloch_trusted_time::{
+    TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
+    VerifiedTrustedTime, create_trusted_time_token, trusted_time_policy_sha256,
+    trusted_time_signature_message, verify_trusted_time_token,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const IDENTITY: &str = "data:tenant-a:lifecycle";
 const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -89,11 +98,19 @@ impl Fixture {
     }
 
     fn authorization(&self, signatures: usize) -> Result<Vec<u8>, CallerAuthorizationError> {
+        self.authorization_for_nonce(signatures, NONCE)
+    }
+
+    fn authorization_for_nonce(
+        &self,
+        signatures: usize,
+        nonce: &str,
+    ) -> Result<Vec<u8>, CallerAuthorizationError> {
         let message = caller_authorization_signature_message(
             &self.request,
             &self.policy,
             &self.pin,
-            NONCE,
+            nonce,
             1_110,
             1_130,
         )?;
@@ -111,7 +128,7 @@ impl Fixture {
             &self.request,
             &self.policy,
             &self.pin,
-            NONCE,
+            nonce,
             1_110,
             1_130,
             &signatures,
@@ -147,6 +164,136 @@ fn threshold_authorizes_exact_canonical_request() {
     assert_eq!(verified.remote_cursor_policy_sha256(), fixture.remote_pin);
     assert_eq!(verified.state_identity(), IDENTITY);
     assert_eq!(verified.authority_ids(), &["caller-1", "caller-2"]);
+}
+
+#[test]
+fn trusted_time_verifier_binds_time_to_the_exact_cas_audience() {
+    let fixture = Fixture::new(IDENTITY, 39);
+    let bytes = fixture.authorization(2).unwrap();
+    let trusted = verified_time(IDENTITY, &fixture.remote_pin, 1_120);
+    let verified = verify_caller_authorization_with_trusted_time(
+        &bytes,
+        &fixture.request,
+        &fixture.policy,
+        &fixture.pin,
+        NONCE,
+        &trusted,
+    )
+    .unwrap();
+    assert_eq!(verified.request_sha256(), fixture.request.request_sha256());
+
+    let cross = verified_time("pay:tenant-a:lifecycle", &fixture.remote_pin, 1_120);
+    assert_eq!(
+        verify_caller_authorization_with_trusted_time(
+            &bytes,
+            &fixture.request,
+            &fixture.policy,
+            &fixture.pin,
+            NONCE,
+            &cross,
+        ),
+        Err(CallerAuthorizationError::TrustedTimeAudienceMismatch)
+    );
+}
+
+#[test]
+fn only_a_durably_consumed_exact_challenge_becomes_replay_protected() {
+    let fixture = Fixture::new(IDENTITY, 40);
+    let store = fixture._path.join("challenge-store");
+    provision_challenge_store(&store).unwrap();
+    let audience = ChallengeAudience {
+        caller_policy_sha256: &fixture.pin,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+        state_identity: IDENTITY,
+    };
+    let issued = issue_challenge(&store, audience, Duration::from_secs(10)).unwrap();
+    let nonce = issued.nonce().to_owned();
+    let bytes = fixture.authorization_for_nonce(2, &nonce).unwrap();
+    let trusted = verified_time(IDENTITY, &fixture.remote_pin, 1_120);
+    let verified = verify_caller_authorization_with_trusted_time(
+        &bytes,
+        &fixture.request,
+        &fixture.policy,
+        &fixture.pin,
+        &nonce,
+        &trusted,
+    )
+    .unwrap();
+    let consumed = consume_challenge(&store, audience, issued, &nonce).unwrap();
+    let replay_protected = bind_consumed_challenge(verified, consumed).unwrap();
+    assert_eq!(
+        replay_protected.request_sha256(),
+        fixture.request.request_sha256()
+    );
+    assert!(
+        replay_protected
+            .challenge_consumption_sha256()
+            .starts_with("0x")
+    );
+}
+
+#[test]
+fn consumed_challenge_for_another_nonce_cannot_upgrade_authorization() {
+    let fixture = Fixture::new(IDENTITY, 41);
+    let store = fixture._path.join("challenge-mismatch-store");
+    provision_challenge_store(&store).unwrap();
+    let audience = ChallengeAudience {
+        caller_policy_sha256: &fixture.pin,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+        state_identity: IDENTITY,
+    };
+    let signed_lease = issue_challenge(&store, audience, Duration::from_secs(10)).unwrap();
+    let signed_nonce = signed_lease.nonce().to_owned();
+    let other_lease = issue_challenge(&store, audience, Duration::from_secs(10)).unwrap();
+    let other_nonce = other_lease.nonce().to_owned();
+    let bytes = fixture.authorization_for_nonce(2, &signed_nonce).unwrap();
+    let trusted = verified_time(IDENTITY, &fixture.remote_pin, 1_120);
+    let verified = verify_caller_authorization_with_trusted_time(
+        &bytes,
+        &fixture.request,
+        &fixture.policy,
+        &fixture.pin,
+        &signed_nonce,
+        &trusted,
+    )
+    .unwrap();
+    let consumed = consume_challenge(&store, audience, other_lease, &other_nonce).unwrap();
+    assert!(matches!(
+        bind_consumed_challenge(verified, consumed),
+        Err(CallerAuthorizationError::ChallengeMismatch)
+    ));
+}
+
+#[test]
+fn replay_protected_capability_expires_with_its_consumed_challenge() {
+    let fixture = Fixture::new(IDENTITY, 42);
+    let store = fixture._path.join("challenge-expiry-store");
+    provision_challenge_store(&store).unwrap();
+    let audience = ChallengeAudience {
+        caller_policy_sha256: &fixture.pin,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+        state_identity: IDENTITY,
+    };
+    let issued = issue_challenge(&store, audience, Duration::from_secs(1)).unwrap();
+    let nonce = issued.nonce().to_owned();
+    let bytes = fixture.authorization_for_nonce(2, &nonce).unwrap();
+    let trusted = verified_time(IDENTITY, &fixture.remote_pin, 1_120);
+    let verified = verify_caller_authorization_with_trusted_time(
+        &bytes,
+        &fixture.request,
+        &fixture.policy,
+        &fixture.pin,
+        &nonce,
+        &trusted,
+    )
+    .unwrap();
+    let consumed = consume_challenge(&store, audience, issued, &nonce).unwrap();
+    let replay_protected = bind_consumed_challenge(verified, consumed).unwrap();
+    std::thread::sleep(Duration::from_millis(1_100));
+    assert_eq!(
+        replay_protected.ensure_monotonic_freshness(),
+        Err(CallerAuthorizationError::ChallengeExpired)
+    );
 }
 
 #[test]
@@ -339,6 +486,48 @@ fn remote_policy(identity: &str, marker: u8) -> RemoteCursorPolicy {
             ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().as_bytes())),
         }],
     }
+}
+
+fn verified_time(identity: &str, remote_pin: &str, now: u64) -> VerifiedTrustedTime {
+    const TIME_NONCE: &str = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let keys = [
+        SigningKey::from_bytes(&[41; 32]),
+        SigningKey::from_bytes(&[42; 32]),
+        SigningKey::from_bytes(&[43; 32]),
+    ];
+    let policy = TrustedTimePolicy {
+        schema: TRUSTED_TIME_POLICY_SCHEMA.into(),
+        policy_id: "caller-auth-test-time".into(),
+        signature_domain: "bloch-products-trusted-time-v1".into(),
+        state_identity: identity.into(),
+        remote_cursor_policy_sha256: remote_pin.into(),
+        threshold: 2,
+        effective_at_unix_seconds: 1_000,
+        expires_at_unix_seconds: 2_000,
+        max_token_lifetime_seconds: 30,
+        authorities: keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| TrustedTimeAuthority {
+                authority_id: format!("time-{}", index + 1),
+                ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().as_bytes())),
+            })
+            .collect(),
+    };
+    let pin = trusted_time_policy_sha256(&policy).unwrap();
+    let message = trusted_time_signature_message(&policy, &pin, TIME_NONCE, now, now + 10).unwrap();
+    let signatures = keys
+        .iter()
+        .take(2)
+        .enumerate()
+        .map(|(index, key)| TrustedTimeSignature {
+            authority_id: format!("time-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let token =
+        create_trusted_time_token(&policy, &pin, TIME_NONCE, now, now + 10, &signatures).unwrap();
+    verify_trusted_time_token(&token, &policy, &pin, TIME_NONCE, None).unwrap()
 }
 
 fn sha(bytes: &[u8]) -> String {

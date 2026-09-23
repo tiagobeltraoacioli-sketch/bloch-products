@@ -62,7 +62,11 @@ will follow working implementations and retained evidence.
    durable CAS reference core now exist. Threshold-authenticated,
    audience-bound trusted-time capabilities, fresh bounded acquisition, a
    single-host monotonic-boundary reference store, bounded cursor ingress and
-   threshold caller authorization for exact CAS requests also exist. A
+   threshold caller authorization for exact CAS requests also exist. A durable
+   single-host one-time challenge store now upgrades exact authorizations into
+   linear replay-protected CAS capabilities. A canonical external-anchor
+   protocol can authenticate an independently retained monotonic generation and
+   time boundary, but does not provide the TPM/WORM/remote counter itself. A
    qualified network transport, independent rollback-resistant time root,
    suspend/resume qualification, replicated remote deployment, operational
    trust roots, encryption and multi-host HA remain open.
