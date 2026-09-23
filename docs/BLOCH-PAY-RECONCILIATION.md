@@ -80,7 +80,49 @@ payment amount fail closed. `refund_observed` is evidence from a configured
 source, not proof that funds settled or authority to credit an account.
 Adjustment state can be rehydrated only when its canonical digest, generation,
 policy roots and exact payment roots match independently retained expectations.
-That recovery does not provide storage durability or HA.
+`bloch-local-state-store` now supplies an optional crash-safe, single-host
+filesystem layer for those canonical bytes. It does not make the root
+independent and does not provide HA.
+
+## Adjustment-state persistence and recovery
+
+For each accepted adjustment generation, the Pay worker persists the exact
+`AdjustmentState::canonical_bytes()` with `write_state`. Generation zero is the
+only permitted initial write; subsequent writes use the independently retained
+previous `StateRoot` and advance exactly once. A byte-identical replay is
+idempotent, while a stale root, skipped generation or conflicting byte string
+fails closed.
+
+The returned root is small, but it is security-critical. Its canonical bytes
+must leave the state-store failure domain through an authenticated channel, for
+example a separately administered signed checkpoint service. It must not be
+read from an adjacent file in the same directory and then treated as an
+independent expectation.
+
+Startup recovery follows this order:
+
+1. obtain and canonically parse the independently retained `StateRoot`;
+2. call `load_state`, which checks the local envelope, identity, generation and
+   SHA-256 digest against that root;
+3. call `restore_adjustment_state` over the returned bytes with the expected
+   adjustment and reconciliation policy digests, adjustment/payment identities,
+   payment digest and amount, generation and state digest; and
+4. expose no recovered state unless both layers succeed.
+
+The filesystem layer creates a mode `0700` directory and mode `0600` files,
+rejects symlinks and hard links, serializes local writers under a bounded lock,
+and uses atomic replacement plus `fsync`. It is limited to 8 MiB per state and
+does not encrypt data, authenticate the host, retain roots independently,
+replicate state or manage backups.
+
+A dedicated or otherwise qualified Unix node with 8 GB RAM is sufficient for
+this bounded pilot workload; RAM is not the production gate. Before reusing a
+node that ran Genesis 3 or AuxPoW, operators must inventory and stop the old
+service, preserve any required evidence, use a separate restricted service
+account and state path, confirm disk capacity and encryption policy, and verify
+that no old process can access the Pay directory. Co-location does not add HA:
+backup restore, monitoring and a separately administered root/checkpoint path
+remain required before production qualification.
 
 ## Remaining production gates
 
@@ -88,7 +130,7 @@ That recovery does not provide storage durability or HA.
 - network-native canonical ancestry and consensus-finality evidence (threshold
   authority attestations are implemented but do not close this gate);
 - distributed allocation consistency and high availability across hosts and
-  databases (the current durable store is single-host);
+  databases (both current durable stores are single-host);
 - hardened external policy-wallet/HSM operation, issuer revocation and key
   lifecycle controls;
 - privacy-governed storage and controlled customer/merchant APIs;

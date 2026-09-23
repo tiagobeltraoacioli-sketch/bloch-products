@@ -188,6 +188,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-store"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-pay-adjustments"
 version = "0.1.0"
 dependencies = [

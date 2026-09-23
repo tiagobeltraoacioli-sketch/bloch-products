@@ -25,5 +25,38 @@ digests and the exact payment identity/digest/amount. It also revalidates the
 complete status-transition chain and duplicate identities. Because compact
 state retains event digests rather than detached signatures, recovery proves
 agreement with the independent state root; it does not reauthenticate the
-original event signatures. Filesystem durability and protected root retention
-remain external responsibilities.
+original event signatures.
+
+## Local persistence
+
+`bloch-local-state-store` can provide the single-host filesystem layer for this
+state. Persist the exact result of `AdjustmentState::canonical_bytes()` under a
+stable identity (normally the adjustment ID), using `AdjustmentState::generation()`
+as the store generation. Keep the returned `StateRoot::canonical_bytes()` in a
+separate authenticated control plane; saving that root beside `state.json` does
+not provide rollback protection.
+
+Recovery is deliberately two-stage:
+
+1. parse the independently retained root with `parse_state_root`, then call
+   `load_state` with that root;
+2. pass the loaded bytes to `restore_adjustment_state` with an
+   `AdjustmentStateExpectation` containing the same root digest and generation,
+   plus the independently retained adjustment-policy, reconciliation-policy and
+   payment roots.
+
+Only a state returned by the second step may re-enter the adjustment state
+machine. The local store verifies the filesystem envelope and compare-and-swap
+lineage; `restore_adjustment_state` verifies the Bloch Pay meaning of its
+contents. Neither check substitutes for the other.
+
+The store accepts an initial generation of zero and then exactly one generation
+per successful update. Publish the new root to the independent control plane
+before considering the update recoverable, and never derive the expected root
+from the same local directory during startup. A missing, stale or mismatched
+root must stop recovery rather than select the newest-looking local file.
+
+This is bounded local durability, not a database or secret store. It permits at
+most 8 MiB of state, is Unix-only, uses one bounded writer lock and provides no
+encryption, backup, replication, high availability, key custody or host
+attestation. Those responsibilities remain external.

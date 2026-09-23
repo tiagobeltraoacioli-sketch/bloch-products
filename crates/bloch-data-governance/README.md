@@ -82,6 +82,32 @@ the resulting canonical bytes must exactly equal the stored bytes. This closes
 safe object rehydration, but does not itself provide filesystem durability,
 external root retention, multi-writer coordination or HA.
 
+`bloch-local-state-store` can supply the missing single-host filesystem layer on
+Unix. After each accepted lifecycle transition, serialize the opaque state with
+`lifecycle_state_bytes`, then call `write_state` with a stable record-scoped
+identity, `LifecycleState::sequence()` as the generation and the previously
+retained `StateRoot` as the compare-and-swap predecessor. The initial state has
+generation zero and no predecessor. Retain `StateRoot::canonical_bytes()` by a
+separate authenticated path; copying it beside `state.json` does not provide
+anti-rollback protection.
+
+After restart, parse that independently obtained root with `parse_state_root`,
+use `load_state` to recover the exact bytes, and then pass those bytes to
+`restore_lifecycle_state`. Its `LifecycleStateExpectation` must carry the same
+sequence/state digest plus the independently retained lifecycle-policy,
+governance-policy, dataset-schema and record roots. Loading bytes from the
+filesystem is never sufficient to make them a valid lifecycle state: only the
+semantic replay performed by `restore_lifecycle_state` does that.
+
+The local store permits one bounded state object per directory, rejects unsafe
+Unix file objects and modes, serializes local writers with a bounded lock, and
+uses atomic replacement with filesystem synchronization. It does not encrypt,
+back up, replicate or authenticate the host; it does not provide distributed
+HA, key custody, external-root retention or physical deletion. Use a distinct
+store directory per lifecycle record and do not place regulated payloads there
+unless storage encryption, access control, retention and backup behavior have
+been independently approved.
+
 The policy's `constructionId` is an allowlist binding, not cryptographic proof.
 The operator must separately qualify and enforce a randomized, hiding
 commitment implementation; a plain deterministic hash of PII or financial data

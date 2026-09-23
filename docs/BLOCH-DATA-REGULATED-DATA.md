@@ -124,6 +124,27 @@ roots, then replays every signed transition. This detects altered or rolled-back
 local bytes when the independent roots are current; it is not a substitute for
 durable protected storage of those roots.
 
+For a single Unix host, `bloch-local-state-store` can persist the canonical
+bytes produced by `lifecycle_state_bytes` with atomic replacement, bounded local
+writer locking and generation/digest compare-and-swap. The store generation
+must equal the lifecycle sequence. On recovery, `load_state` must be given a
+`StateRoot` obtained through an authenticated path independent of the state
+directory; the returned bytes must then pass `restore_lifecycle_state` with the
+independently retained lifecycle-policy, governance-policy, dataset-schema,
+record, sequence and state-digest expectations. Neither successful filesystem
+loading nor a matching local digest establishes authorization or lifecycle
+validity by itself.
+
+An idle 8 GB Bloch node previously assigned to Genesis 3 or AuxPoW is a
+candidate for the initial bounded local runtime only after the old service and
+its data, ports, credentials, monitoring and backup obligations have been
+inventoried and formally migrated or decommissioned. Run Bloch Data under a
+dedicated unprivileged account, use a distinct protected filesystem and store
+directory, deny public ingress by default, and retain the anti-rollback root
+outside that host. The 8 GB capacity is not evidence of tenant isolation, encryption,
+regulatory compliance, backup recovery or HA; production institutional data
+remains denied until those controls and the other gates above are qualified.
+
 The intended local/off-chain execution and minimized on-chain verification
 boundary is specified in
 [`BLOCH-DATA-HYBRID-ARCHITECTURE.md`](BLOCH-DATA-HYBRID-ARCHITECTURE.md).

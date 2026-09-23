@@ -88,6 +88,11 @@ identity, prove finality, activate a network, or authorize asset movement.
   cancellation, dispute and refund lifecycles bound to the exact payment. It
   observes events only and never sends refunds or moves funds. Canonical state
   recovery requires independent digest, generation, policy and payment roots.
+- `bloch-local-state-store`: common Unix-only, bounded persistence for exact
+  Bloch Data and Bloch Pay state bytes, with owner-only files, bounded locking,
+  compare-and-swap generations, atomic `fsync` replacement and independently
+  retained anti-rollback roots. It provides neither encryption nor HA, and the
+  product crates still perform semantic and signature validation after load.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.

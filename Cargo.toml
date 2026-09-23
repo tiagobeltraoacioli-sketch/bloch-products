@@ -13,6 +13,7 @@ members = [
   "crates/bloch-indexer-input",
   "crates/bloch-indexer-protocol",
   "crates/bloch-indexer-query",
+  "crates/bloch-local-state-store",
   "crates/bloch-pay-reconciliation",
   "crates/bloch-pay-allocation-store",
   "crates/bloch-pay-adjustments",

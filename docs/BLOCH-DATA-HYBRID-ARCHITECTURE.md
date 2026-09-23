@@ -81,6 +81,21 @@ side channels or contract events private.
   output is a signed result/proof package with no persistent raw-data copy unless
   the retention policy explicitly permits it.
 
+For the current development profile, a formally released 8 GB Unix node formerly
+running Genesis 3 or AuxPoW can host the bounded lifecycle-state service. Each
+record uses a distinct `bloch-local-state-store` directory. The service writes
+canonical lifecycle bytes with the lifecycle sequence as its compare-and-swap
+generation, while an authenticated control plane retains the returned root
+outside the node. Restart admission first checks the local envelope against that
+independent root and then replays the lifecycle state against independently
+pinned policy, schema and record context. The node must not retain the only copy
+of either class of root.
+
+This profile is single-host and fail-closed. It is not a confidential execution
+runtime, encrypted database, replica, backup, HSM/KMS, HA service or compliance
+certification. Discovery and safe retirement of the previous workload precede
+installation; unknown legacy processes or ownership make admission fail closed.
+
 Shared multi-tenant processing remains denied until isolation, authorization,
 key separation, query controls, deletion and backup behavior pass independent
 qualification. A local deployment is not automatically compliant: software,
@@ -109,6 +124,10 @@ This repository now contains an offline salted-record commitment for authorized
 record projections and a signed retention/legal-hold evidence state machine.
 The former cannot prove nonce entropy or hiding strength; the latter records an
 external evidence reference but cannot execute or prove physical deletion.
+Canonical lifecycle bytes can also be placed in a crash-safe, single-host Unix
+store with local compare-and-swap and checked against an independently retained
+root before semantic replay. This closes neither encryption nor protected root
+custody, replication, backup recovery or HA.
 The repository still does not contain the confidential execution runtime,
 tenant-isolated encrypted store, KMS/HSM integration, privacy release policy,
 qualified commitment/proof circuit or on-chain verifier described above. They

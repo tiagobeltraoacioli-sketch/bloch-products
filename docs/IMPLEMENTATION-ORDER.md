@@ -32,7 +32,11 @@ will follow working implementations and retained evidence.
    qualified commitment implementations, physical privacy-lifecycle execution,
    independently operated WORM replicas and distributed database/HA operation
    remain open. Offline signed retention/legal-hold evidence and a deliberately
-   unqualified salted-record equality commitment are implemented.
+   unqualified salted-record equality commitment are implemented. Canonical
+   lifecycle bytes can now use a crash-safe single-host Unix store with bounded
+   local locking and compare-and-swap against an independently retained root;
+   lifecycle semantic replay remains mandatory, and encrypted storage,
+   protected external-root custody, backup recovery and HA remain open.
 6. Non-custodial payment reconciliation — deterministic invoice/observation
    matching with pinned routes and permanently false settlement/credit claims is
    implemented. Exact observations can be authenticated against pinned Ed25519
@@ -47,8 +51,9 @@ will follow working implementations and retained evidence.
    cancellation/dispute/refund observations now feed a replay-safe local state
    machine, but no external adjustment is executed by the software. Both the
    Data lifecycle and Pay adjustment states now have bounded canonical recovery
-   against independent anti-rollback roots; durable protected root storage is
-   still open.
+   against independent anti-rollback roots. A common Unix-only local store adds
+   crash-safe CAS persistence for their exact bytes; an authenticated external
+   root-retention service, encryption and multi-host HA remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 
