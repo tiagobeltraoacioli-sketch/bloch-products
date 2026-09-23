@@ -13,8 +13,8 @@
     {
       "id": "bloch-data-dev-cloud",
       "priority": "P1",
-      "status": "planned",
-      "capabilities": ["indexer", "webhooks", "sdk", "sandbox"],
+      "status": "core-in-development",
+      "capabilities": ["anchored-canonical-indexer", "bounded-reorg-state-machine", "webhooks", "sdk", "sandbox"],
       "gates": ["complete-indexer", "versioned-api", "observable-availability"]
     },
     {

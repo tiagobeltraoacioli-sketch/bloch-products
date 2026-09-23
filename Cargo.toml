@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/bloch-indexer-core",
   "crates/bloch-verify-core",
   "crates/bloch-verify-cli",
 ]

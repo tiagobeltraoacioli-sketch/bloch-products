@@ -17,6 +17,7 @@ identity, prove finality, activate a network, or authorize asset movement.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
 - Descriptor-bound input/output handling and recursive duplicate-key rejection.
+- `bloch-indexer-core`: anchored canonical-chain state machine with bounded reorgs.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
 

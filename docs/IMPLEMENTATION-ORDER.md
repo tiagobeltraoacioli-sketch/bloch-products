@@ -13,7 +13,9 @@ will follow working implementations and retained evidence.
 4. Machine-readable production qualification gates — implemented fail-closed;
    organization-independence, ancestry and consensus-finality verifiers remain
    open.
-5. Indexer, versioned read API, idempotent webhooks and SDK.
+5. Anchored canonical indexer state machine — implemented in memory; durable
+   storage, restart recovery, versioned read API, idempotent webhooks and SDK
+   remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
