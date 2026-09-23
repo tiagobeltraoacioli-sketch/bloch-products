@@ -23,6 +23,18 @@ exact canonical bytes without interpreting them.
 The caller obtains `StateRoot::canonical_bytes()` after a successful write and
 must send them to a separate authenticated root-retention system. A root read
 from the same disk is not independent and cannot establish anti-rollback.
+Root schema v2 also binds the preceding canonical root digest, so an
+authenticated current root commits to its immediate CAS lineage. Version-1
+roots and envelopes are intentionally rejected; there is no automatic in-place
+migration of an existing store.
+
+`bloch-local-state-checkpoint` can authenticate a root with a threshold of
+externally held Ed25519 keys. Its policy binds the environment domain and exact
+state identity, rejects duplicate authority IDs and duplicate public keys, and
+checks checkpoint freshness. Verification still requires the expected current
+generation and state digest from an independent monotonic control plane. Taking
+those expectations from the checkpoint itself would permit replay of an old,
+validly signed checkpoint.
 
 ## Product composition
 
@@ -50,3 +62,8 @@ This store does not encrypt protected data, implement KMS/HSM, provide a
 database, coordinate multiple hosts, prove physical erasure, qualify chain
 finality, settle payments or move funds. Those remain separate production
 gates.
+
+Interrupted replacement may leave a private temporary file. The next writer,
+while holding the bounded store lock, validates and removes only files matching
+the store's random temporary-file namespace before proceeding. Until approved
+encryption at rest exists, use synthetic pilot data only.

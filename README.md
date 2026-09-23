@@ -93,6 +93,10 @@ identity, prove finality, activate a network, or authorize asset movement.
   compare-and-swap generations, atomic `fsync` replacement and independently
   retained anti-rollback roots. It provides neither encryption nor HA, and the
   product crates still perform semantic and signature validation after load.
+- `bloch-local-state-checkpoint`: domain-separated threshold Ed25519
+  authentication for exact local-state roots. Signing remains external; exact
+  generation and digest expectations must come from an independent monotonic
+  control plane, and multiple keys do not prove operator independence.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.

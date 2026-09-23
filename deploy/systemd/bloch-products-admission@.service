@@ -1,0 +1,56 @@
+[Unit]
+Description=Bloch products local-state admission for %i
+Documentation=file:/usr/share/doc/bloch-products/AUXPOW-8GB-ADMISSION.md
+After=local-fs.target
+ConditionPathIsExecutable=/usr/local/libexec/bloch-products/bloch-local-state-store
+
+[Service]
+Type=oneshot
+User=bloch-%i
+Group=bloch-%i
+UMask=0077
+Environment=BLOCH_ENV_FILE=/etc/bloch-products/%i.env
+EnvironmentFile=/etc/bloch-products/%i.env
+LoadCredential=state-root:/etc/bloch-products/roots/%i.root.json
+# The preflight needs root only to inspect root-owned admission sources. It is
+# read-only; the verifier itself runs as the dedicated unprivileged account.
+ExecStartPre=+/usr/local/libexec/bloch-products/preflight.sh --instance %i
+ExecStartPre=/usr/local/libexec/bloch-products/credential-preflight.sh --root ${CREDENTIALS_DIRECTORY}/state-root
+ExecStart=/usr/local/libexec/bloch-products/bloch-local-state-store verify --store ${BLOCH_STATE_DIR} --root ${CREDENTIALS_DIRECTORY}/state-root
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/etc/bloch-products
+ReadWritePaths=/var/lib/bloch-products/%i
+InaccessiblePaths=-/run/k3s -/run/containerd -/run/docker.sock -/var/run/docker.sock
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+SystemCallArchitectures=native
+CPUQuota=25%
+MemoryHigh=256M
+MemoryMax=512M
+TasksMax=32
+LimitNOFILE=128
+LimitFSIZE=32M
+IOWeight=10
+OOMPolicy=stop
+
+# This is an admission check, not a continuously running product service.
+RemainAfterExit=no

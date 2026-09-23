@@ -188,9 +188,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-store",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-store"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "hex",
  "libc",
  "serde",

@@ -15,8 +15,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub const STATE_STORE_SCHEMA: &str = "bloch.products.local-state-envelope.v1";
-pub const STATE_ROOT_SCHEMA: &str = "bloch.products.local-state-root.v1";
+pub const STATE_STORE_SCHEMA: &str = "bloch.products.local-state-envelope.v2";
+pub const STATE_ROOT_SCHEMA: &str = "bloch.products.local-state-root.v2";
 pub const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_ROOT_BYTES: usize = 1024;
 const MAX_ENVELOPE_BYTES: u64 = (MAX_STATE_BYTES as u64 * 2) + 4096;
@@ -32,6 +32,7 @@ pub struct StateRoot {
     state_identity: String,
     generation: u64,
     state_sha256: String,
+    previous_root_sha256: Option<String>,
 }
 
 impl StateRoot {
@@ -45,6 +46,10 @@ impl StateRoot {
 
     pub fn state_sha256(&self) -> &str {
         &self.state_sha256
+    }
+
+    pub fn previous_root_sha256(&self) -> Option<&str> {
+        self.previous_root_sha256.as_deref()
     }
 
     /// Canonical bytes to retain through an independent, authenticated path.
@@ -141,10 +146,12 @@ pub fn write_state(
         state_identity: state_identity.to_owned(),
         generation,
         state_sha256: hash(state),
+        previous_root_sha256: expected_previous.map(root_hash).transpose()?,
     };
     let directory = open_store(store, true)?;
     let _lock = StoreLock::acquire(&directory)?;
     verify_store_path(store, &directory)?;
+    cleanup_stale_temporary_files(&directory)?;
     let current = read_state(&directory)?;
 
     match current {
@@ -156,8 +163,7 @@ pub fn write_state(
             bytes,
             previous_root_sha256: predecessor,
         }) if root == next && bytes == state => {
-            let supplied_predecessor = expected_previous.map(root_hash).transpose()?;
-            if predecessor == supplied_predecessor {
+            if predecessor == next.previous_root_sha256 {
                 return Ok(root);
             }
             return Err(StoreError::ExpectationMismatch);
@@ -182,11 +188,18 @@ pub fn write_state(
         state_identity: next.state_identity.clone(),
         generation: next.generation,
         state_sha256: next.state_sha256.clone(),
-        previous_root_sha256: expected_previous.map(root_hash).transpose()?,
+        previous_root_sha256: next.previous_root_sha256.clone(),
         state_hex: hex::encode(state),
     };
     let bytes = serde_json::to_vec(&envelope).map_err(|_| StoreError::InvalidState)?;
     atomic_replace(&directory, "state.json", &bytes)?;
+    let published = read_state(&directory)?.ok_or(StoreError::StateMissing)?;
+    if published.root != next
+        || published.bytes != state
+        || published.previous_root_sha256 != next.previous_root_sha256
+    {
+        return Err(StoreError::InvalidState);
+    }
     verify_store_path(store, &directory)?;
     Ok(next)
 }
@@ -224,7 +237,14 @@ pub fn load_state(_store: &Path, _expected: &StateRoot) -> Result<Vec<u8>, Store
 
 fn validate_root(root: &StateRoot) -> Result<(), StoreError> {
     validate_identity(&root.state_identity).map_err(|_| StoreError::InvalidRoot)?;
-    if root.schema != STATE_ROOT_SCHEMA || !valid_sha256(&root.state_sha256) {
+    if root.schema != STATE_ROOT_SCHEMA
+        || !valid_sha256(&root.state_sha256)
+        || root
+            .previous_root_sha256
+            .as_deref()
+            .is_some_and(|digest| !valid_sha256(digest))
+        || (root.generation == 0) != root.previous_root_sha256.is_none()
+    {
         return Err(StoreError::InvalidRoot);
     }
     Ok(())
@@ -504,6 +524,7 @@ fn read_state(directory: &File) -> Result<Option<StoredState>, StoreError> {
         state_identity: envelope.state_identity,
         generation: envelope.generation,
         state_sha256: envelope.state_sha256,
+        previous_root_sha256: envelope.previous_root_sha256.clone(),
     };
     validate_root(&root).map_err(|_| StoreError::InvalidState)?;
     Ok(Some(StoredState {
@@ -520,7 +541,7 @@ fn atomic_replace(directory: &File, name: &str, bytes: &[u8]) -> Result<(), Stor
         return Err(StoreError::StoreFull);
     }
     let destination = c_name(name)?;
-    let temp_name = format!(".{name}.tmp-{}-{}", std::process::id(), temporary_nonce());
+    let temp_name = temporary_name(name)?;
     let temporary = c_name(&temp_name)?;
     let fd = unsafe {
         libc::openat(
@@ -582,10 +603,99 @@ fn validate_destination(directory: &File, name: &str) -> Result<(), StoreError> 
 }
 
 #[cfg(unix)]
-fn temporary_nonce() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
+fn temporary_name(name: &str) -> Result<String, StoreError> {
+    let mut random = [0_u8; 16];
+    getrandom::getrandom(&mut random)
+        .map_err(|error| StoreError::Io(std::io::Error::other(error.to_string())))?;
+    Ok(format!(".{name}.tmp-{}", hex::encode(random)))
+}
+
+#[cfg(unix)]
+fn cleanup_stale_temporary_files(directory: &File) -> Result<(), StoreError> {
+    use std::ffi::CStr;
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+
+    let duplicate = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let stream = unsafe { libc::fdopendir(duplicate) };
+    if stream.is_null() {
+        unsafe {
+            libc::close(duplicate);
+        }
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let result = (|| {
+        loop {
+            let mut entry = MaybeUninit::<libc::dirent>::uninit();
+            let mut result = std::ptr::null_mut();
+            #[allow(deprecated)]
+            let error = unsafe { libc::readdir_r(stream, entry.as_mut_ptr(), &mut result) };
+            if error != 0 {
+                return Err(StoreError::Io(std::io::Error::from_raw_os_error(error)));
+            }
+            if result.is_null() {
+                return Ok(());
+            }
+            let entry = unsafe { entry.assume_init() };
+            let name = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
+            let Ok(name) = name.to_str() else {
+                continue;
+            };
+            let Some(suffix) = name.strip_prefix(".state.json.tmp-") else {
+                continue;
+            };
+            if suffix.len() != 32
+                || !suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                continue;
+            }
+            remove_stale_temporary_file(directory, name)?;
+        }
+    })();
+    unsafe {
+        libc::closedir(stream);
+    }
+    result
+}
+
+#[cfg(unix)]
+fn remove_stale_temporary_file(directory: &File, name: &str) -> Result<(), StoreError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let name = c_name(name)?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(error.into())
+        };
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    validate_file(&metadata, false)?;
+    validate_named_file(
+        directory,
+        name.to_str().map_err(|_| StoreError::InvalidState)?,
+        &metadata,
+    )?;
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    directory.sync_all()?;
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -682,6 +792,28 @@ mod tests {
     }
 
     #[test]
+    fn predecessor_digest_tampering_fails_against_v2_root() {
+        let path = temporary_path("lineage-tamper");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let root1 = write_state(&path, "data:one", 1, b"one", Some(&root0)).unwrap();
+        let predecessor = root1.previous_root_sha256().unwrap().as_bytes();
+        let mut envelope = std::fs::read(path.join("state.json")).unwrap();
+        let offset = envelope
+            .windows(predecessor.len())
+            .position(|window| window == predecessor)
+            .unwrap();
+        let last = offset + predecessor.len() - 1;
+        envelope[last] = if envelope[last] == b'0' { b'1' } else { b'0' };
+        std::fs::write(path.join("state.json"), envelope).unwrap();
+
+        assert!(matches!(
+            load_state(&path, &root1),
+            Err(StoreError::ExpectationMismatch)
+        ));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn corruption_and_noncanonical_root_fail_closed() {
         let path = temporary_path("corrupt");
         let root = write_state(&path, "data:one", 0, b"zero", None).unwrap();
@@ -728,7 +860,7 @@ mod tests {
     #[test]
     fn absent_load_has_no_filesystem_side_effect() {
         let path = temporary_path("missing");
-        let root_bytes = br#"{"schema":"bloch.products.local-state-root.v1","stateIdentity":"data:one","generation":0,"stateSha256":"0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}"#;
+        let root_bytes = br#"{"schema":"bloch.products.local-state-root.v2","stateIdentity":"data:one","generation":0,"stateSha256":"0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","previousRootSha256":null}"#;
         let root = parse_state_root(root_bytes).unwrap();
         assert!(matches!(
             load_state(&path, &root),
@@ -737,6 +869,11 @@ mod tests {
         assert!(!path.exists());
         assert!(matches!(
             parse_state_root(&vec![b'x'; MAX_ROOT_BYTES + 1]),
+            Err(StoreError::InvalidRoot)
+        ));
+        let legacy = br#"{"schema":"bloch.products.local-state-root.v1","stateIdentity":"data:one","generation":0,"stateSha256":"0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}"#;
+        assert!(matches!(
+            parse_state_root(legacy),
             Err(StoreError::InvalidRoot)
         ));
     }
@@ -751,6 +888,20 @@ mod tests {
             load_state(&path, &root),
             Err(StoreError::UnsafeStore(_))
         ));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn stale_random_temporary_file_is_removed_under_the_writer_lock() {
+        let path = temporary_path("stale-temp");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let stale = path.join(".state.json.tmp-0123456789abcdef0123456789abcdef");
+        std::fs::write(&stale, b"plaintext-from-interrupted-write").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let root1 = write_state(&path, "data:one", 1, b"one", Some(&root0)).unwrap();
+        assert!(!stale.exists());
+        assert_eq!(load_state(&path, &root1).unwrap(), b"one");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
