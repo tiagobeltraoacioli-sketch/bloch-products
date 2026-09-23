@@ -22,6 +22,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-indexer-audit-retention"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-audit",
+ "bloch-indexer-core",
+ "ed25519-dalek",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-indexer-core"
 version = "0.1.0"
 dependencies = [
@@ -43,6 +58,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-indexer-delivery-transport"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -79,6 +107,18 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-indexer-receipt-ack"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "ed25519-dalek",
+ "hex",
  "sha2",
  "thiserror",
 ]

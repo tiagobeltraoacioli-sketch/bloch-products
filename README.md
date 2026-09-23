@@ -30,8 +30,17 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-indexer-delivery-protocol`: versioned, domain-separated Ed25519
   delivery envelopes and receiver acceptance receipts bound to exact durable
   claims and independently pinned sender/receiver trust roles.
+- `bloch-indexer-receipt-ack`: verifies the exact authenticated delivery and
+  receipt before a lock-and-reload acknowledgement, retaining receiver and
+  policy/delivery/receipt digests in the same durable snapshot transition.
+- `bloch-indexer-delivery-transport`: bounded canonical request/response codecs
+  that authenticate embedded deliveries and receipts while leaving sockets and
+  HTTP/RPC operation to the caller.
 - `bloch-indexer-audit`: bounded canonical checkpoint artifacts and detached
   Ed25519 verification against an independently pinned audit policy.
+- `bloch-indexer-audit-retention`: private create-once local ledger for signed
+  audit artifacts, with hash chaining and independently retained count/head
+  expectations for truncation detection.
 - Unix snapshot mutations use a bounded local single-writer lock, reload the
   latest durable state while locked and reject unsafe lock files. Snapshot
   initialization is create-once and cannot overwrite existing state.
@@ -87,8 +96,9 @@ The indexer snapshot, pending outbox, compacted checkpoint and delivery cursor
 are recovered together. The libraries define producer, delivery, receipt,
 audit, claim/retry/acknowledgement and read contracts, but perform no RPC
 ingestion, webhook delivery, HTTP serving or database-backed HA operation. A
-verified receipt authenticates receiver acceptance but never acknowledges
-durable state automatically. Producer, receiver and audit authentication are
+verified receipt can reach durable acknowledgement only through the explicit
+receipt-ACK coordinator; protocol verification alone never mutates state.
+Producer, receiver and audit authentication are
 not consensus finality. The indexer remains a local fail-closed core rather
 than a production service.
 

@@ -6,7 +6,10 @@
 
 use crate::{
     ApplyOutcome, BlockAnchor, CanonicalBlock, CanonicalIndexer, ChainIdentity, IndexerError,
-    delivery::{ClaimOutcome, DeliveryClaim, DeliveryError, OutboxDelivery, ResolutionOutcome},
+    delivery::{
+        AcknowledgementEvidence, ClaimOutcome, DeliveryClaim, DeliveryError, OutboxDelivery,
+        ResolutionOutcome,
+    },
     outbox::{CompactionSummary, OutboxError, OutboxQueue, build_outbox},
     validate_block,
 };
@@ -20,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v3";
+const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v4";
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_COMPACTION_BATCHES_PER_CALL: usize = 10_000;
 const DEFAULT_LOCK_WAIT: Duration = Duration::from_secs(5);
@@ -276,6 +279,26 @@ pub fn acknowledge_and_persist(
         let outcome = candidate
             .delivery
             .acknowledge(&candidate.outbox, claim, now_unix_seconds)?;
+        Ok((outcome, true))
+    })
+}
+
+/// Persists an acknowledgement and its already-verified authentication
+/// evidence in one snapshot replacement under the writer lock.
+pub fn acknowledge_with_evidence_and_persist(
+    state: &mut DurableState,
+    path: &Path,
+    claim: &DeliveryClaim,
+    evidence: &AcknowledgementEvidence,
+    now_unix_seconds: u64,
+) -> Result<ResolutionOutcome, StorageError> {
+    update_under_writer_lock(state, path, |candidate| {
+        let outcome = candidate.delivery.acknowledge_with_evidence(
+            &candidate.outbox,
+            claim,
+            evidence,
+            now_unix_seconds,
+        )?;
         Ok((outcome, true))
     })
 }
@@ -1248,13 +1271,13 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_v2_requires_explicit_migration() {
+    fn snapshot_v3_requires_explicit_migration() {
         let directory = private_directory();
         let path = directory.join("indexer.snapshot.json");
         write_snapshot(&DurableState::new(indexer()), &path).unwrap();
         let mut snapshot: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        snapshot["schema"] = serde_json::json!("bloch.data.indexer-snapshot.v2");
+        snapshot["schema"] = serde_json::json!("bloch.data.indexer-snapshot.v3");
         fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
         assert!(matches!(
             load_snapshot(&path),

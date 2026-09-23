@@ -1,0 +1,361 @@
+#![cfg(unix)]
+
+use bloch_indexer_audit::{
+    AuditSigner, AuditTrustPolicy, audit_trust_policy_sha256, canonical_audit_trust_policy_bytes,
+    detached_signature_message, export_audit_artifact, verify_audit_artifact,
+};
+use bloch_indexer_audit_retention::{
+    RetentionError, RetentionExpectation, append_audit_entry, verify_audit_ledger,
+    verify_audit_ledger_with_expectation,
+};
+use bloch_indexer_core::{
+    ChainIdentity,
+    outbox::{
+        OUTBOX_CHECKPOINT_LINK_SCHEMA, OUTBOX_CHECKPOINT_SCHEMA, OutboxCheckpoint,
+        OutboxCheckpointLink,
+    },
+};
+use ed25519_dalek::{Signer, SigningKey};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn hash(character: char) -> String {
+    format!("0x{}", character.to_string().repeat(64))
+}
+
+struct StableDigest(Sha256);
+
+impl StableDigest {
+    fn new(domain: &str) -> Self {
+        let mut digest = Self(Sha256::new());
+        digest.text(domain);
+        digest
+    }
+    fn text(&mut self, value: &str) {
+        self.0.update((value.len() as u64).to_be_bytes());
+        self.0.update(value.as_bytes());
+    }
+    fn number(&mut self, value: u64) {
+        self.0.update(value.to_be_bytes());
+    }
+    fn finish(self) -> String {
+        format!("0x{}", hex::encode(self.0.finalize()))
+    }
+}
+
+fn network() -> ChainIdentity {
+    ChainIdentity {
+        network: "bloch-l2".into(),
+        chain_id: 700_771,
+        genesis_hash: hash('a'),
+    }
+}
+
+fn checkpoint(tip: char) -> OutboxCheckpoint {
+    let network = network();
+    let anchor = hash('1');
+    let new_tip = hash(tip);
+    let transition_id = hash('3');
+    let batch_hash = hash('4');
+    let mut genesis = StableDigest::new("bloch.data.outbox-checkpoint-genesis.v1");
+    genesis.text(&network.network);
+    genesis.number(network.chain_id);
+    genesis.text(&network.genesis_hash);
+    genesis.text(&anchor);
+    let initial = genesis.finish();
+    let mut link = StableDigest::new("bloch.data.outbox-checkpoint-link.v1");
+    link.text(&initial);
+    link.text(&transition_id);
+    link.text(&anchor);
+    link.text(&new_tip);
+    link.number(2);
+    link.text(&batch_hash);
+    let chain_hash = link.finish();
+    OutboxCheckpoint {
+        schema: OUTBOX_CHECKPOINT_SCHEMA.into(),
+        network,
+        anchor_tip_hash: anchor.clone(),
+        compacted_tip_hash: new_tip.clone(),
+        batch_count: 1,
+        record_count: 2,
+        chain_hash: chain_hash.clone(),
+        links: vec![OutboxCheckpointLink {
+            schema: OUTBOX_CHECKPOINT_LINK_SCHEMA.into(),
+            transition_id,
+            previous_tip_hash: anchor,
+            new_tip_hash: new_tip,
+            record_count: 2,
+            batch_hash,
+            chain_hash,
+        }],
+    }
+}
+
+struct Fixture {
+    key: SigningKey,
+    policy: AuditTrustPolicy,
+    policy_bytes: Vec<u8>,
+    policy_sha256: String,
+}
+
+impl Fixture {
+    fn new(seed: u8) -> Self {
+        let key = SigningKey::from_bytes(&[seed; 32]);
+        let policy = AuditTrustPolicy {
+            audit_domain: "bloch-prod-outbox-audit-1".into(),
+            network: network(),
+            anchor_tip_hash: hash('1'),
+            signers: vec![AuditSigner {
+                signer_id: "auditor-1".into(),
+                ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().to_bytes())),
+            }],
+        };
+        let policy_bytes = canonical_audit_trust_policy_bytes(&policy).unwrap();
+        let policy_sha256 = audit_trust_policy_sha256(&policy).unwrap();
+        Self {
+            key,
+            policy,
+            policy_bytes,
+            policy_sha256,
+        }
+    }
+
+    fn signed_artifact(&self, tip: char) -> (Vec<u8>, [u8; 64]) {
+        let bytes = export_audit_artifact(&checkpoint(tip)).unwrap();
+        let verified = verify_audit_artifact(&bytes, None).unwrap();
+        let message = detached_signature_message(&verified, "auditor-1", &self.policy).unwrap();
+        (bytes, self.key.sign(&message).to_bytes())
+    }
+}
+
+#[test]
+fn appends_and_replays_a_canonical_authenticated_chain() {
+    let root = private_temp_directory();
+    let fixture = Fixture::new(7);
+    for tip in ['2', '5'] {
+        let (artifact, signature) = fixture.signed_artifact(tip);
+        append_audit_entry(
+            &root,
+            &artifact,
+            None,
+            "auditor-1",
+            &signature,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+        )
+        .unwrap();
+    }
+    let entries =
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].sequence, 1);
+    assert_eq!(entries[1].previous_entry_sha256, entries[0].entry_sha256);
+    verify_audit_ledger_with_expectation(
+        &root,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        Some(&RetentionExpectation {
+            entry_count: 2,
+            head_sha256: entries[1].entry_sha256.clone(),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::metadata(root.join("00000000000000000001.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    cleanup(root);
+}
+
+#[test]
+fn refuses_wrong_pin_signature_and_policy_without_creating_an_entry() {
+    let root = private_temp_directory();
+    let fixture = Fixture::new(7);
+    let (artifact, signature) = fixture.signed_artifact('2');
+    assert!(matches!(
+        append_audit_entry(
+            &root,
+            &artifact,
+            None,
+            "auditor-1",
+            &signature,
+            &fixture.policy_bytes,
+            &hash('9'),
+        ),
+        Err(RetentionError::Audit(_))
+    ));
+    let mut bad_signature = signature;
+    bad_signature[0] ^= 1;
+    assert!(matches!(
+        append_audit_entry(
+            &root,
+            &artifact,
+            None,
+            "auditor-1",
+            &bad_signature,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+        ),
+        Err(RetentionError::Audit(_))
+    ));
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+
+    let other = Fixture::new(8);
+    assert!(verify_audit_ledger(&root, &other.policy_bytes, &fixture.policy_sha256).is_err());
+    cleanup(root);
+}
+
+#[test]
+fn detects_content_tampering_deletion_and_unexpected_files() {
+    let fixture = Fixture::new(7);
+
+    let tampered = populated_ledger(&fixture, 2);
+    let first = tampered.join("00000000000000000001.json");
+    let mut bytes = fs::read(&first).unwrap();
+    let position = bytes.iter().position(|byte| *byte == b'2').unwrap();
+    bytes[position] = b'3';
+    fs::write(&first, bytes).unwrap();
+    assert!(verify_audit_ledger(&tampered, &fixture.policy_bytes, &fixture.policy_sha256).is_err());
+    cleanup(tampered);
+
+    let missing = populated_ledger(&fixture, 2);
+    fs::remove_file(missing.join("00000000000000000001.json")).unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&missing, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::ChainDiscontinuity)
+    ));
+    cleanup(missing);
+
+    let unexpected = private_temp_directory();
+    fs::write(unexpected.join("notes.txt"), b"not an entry").unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&unexpected, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::InvalidEntryName)
+    ));
+    cleanup(unexpected);
+}
+
+#[test]
+fn an_external_head_detects_valid_tail_truncation() {
+    let fixture = Fixture::new(7);
+    let root = populated_ledger(&fixture, 2);
+    let entries =
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).unwrap();
+    let expected = RetentionExpectation {
+        entry_count: 2,
+        head_sha256: entries[1].entry_sha256.clone(),
+    };
+    fs::remove_file(root.join("00000000000000000002.json")).unwrap();
+    assert!(verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).is_ok());
+    assert!(matches!(
+        verify_audit_ledger_with_expectation(
+            &root,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            Some(&expected),
+        ),
+        Err(RetentionError::InvalidEntry("ledgerExpectation"))
+    ));
+    cleanup(root);
+}
+
+#[test]
+fn rejects_noncanonical_and_relinked_entry_bytes() {
+    let fixture = Fixture::new(7);
+    let root = populated_ledger(&fixture, 1);
+    let entry = root.join("00000000000000000001.json");
+    let original = fs::read(&entry).unwrap();
+    let mut whitespace = Vec::with_capacity(original.len() + 1);
+    whitespace.push(b' ');
+    whitespace.extend(original);
+    fs::write(&entry, whitespace).unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::NonCanonicalEntry)
+    ));
+    cleanup(root);
+
+    let root = populated_ledger(&fixture, 1);
+    let entry = root.join("00000000000000000001.json");
+    let second = root.join("00000000000000000002.json");
+    fs::hard_link(&entry, &second).unwrap();
+    assert!(verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).is_err());
+    cleanup(root);
+}
+
+#[test]
+fn rejects_unsafe_directories_and_entry_links_or_permissions() {
+    let fixture = Fixture::new(7);
+    let root = private_temp_directory();
+    let alias = root.with_extension("alias");
+    symlink(&root, &alias).unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&alias, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::UnsafeLedger(_))
+    ));
+    fs::remove_file(alias).unwrap();
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o770)).unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::UnsafeLedger(_))
+    ));
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    cleanup(root);
+
+    let root = populated_ledger(&fixture, 1);
+    let entry = root.join("00000000000000000001.json");
+    fs::set_permissions(&entry, fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(matches!(
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256),
+        Err(RetentionError::UnsafeLedger(_))
+    ));
+    cleanup(root);
+}
+
+fn populated_ledger(fixture: &Fixture, count: usize) -> PathBuf {
+    let root = private_temp_directory();
+    for tip in ['2', '5'].into_iter().take(count) {
+        let (artifact, signature) = fixture.signed_artifact(tip);
+        append_audit_entry(
+            &root,
+            &artifact,
+            None,
+            "auditor-1",
+            &signature,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+        )
+        .unwrap();
+    }
+    root
+}
+
+fn private_temp_directory() -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bloch-audit-retention-{}-{nonce}-{}",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    root
+}
+
+fn cleanup(path: impl AsRef<Path>) {
+    fs::remove_dir_all(path).unwrap();
+}

@@ -1,8 +1,11 @@
 [workspace]
 members = [
   "crates/bloch-indexer-audit",
+  "crates/bloch-indexer-audit-retention",
   "crates/bloch-indexer-core",
   "crates/bloch-indexer-delivery-protocol",
+  "crates/bloch-indexer-delivery-transport",
+  "crates/bloch-indexer-receipt-ack",
   "crates/bloch-indexer-input",
   "crates/bloch-indexer-protocol",
   "crates/bloch-indexer-query",

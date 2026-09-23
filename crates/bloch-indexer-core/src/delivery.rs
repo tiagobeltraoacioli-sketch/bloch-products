@@ -92,6 +92,18 @@ impl OutboxDelivery {
             {
                 return Err(DeliveryError::InvalidState("resolution"));
             }
+            match (
+                &resolution.disposition,
+                &resolution.acknowledgement_evidence,
+            ) {
+                (ClaimDisposition::Acknowledged, Some(evidence)) => {
+                    validate_acknowledgement_evidence(evidence)?;
+                }
+                (ClaimDisposition::Retry { .. }, Some(_)) => {
+                    return Err(DeliveryError::InvalidState("retryEvidence"));
+                }
+                _ => {}
+            }
             if let ClaimDisposition::Retry {
                 retry_at_unix_seconds,
             } = resolution.disposition
@@ -205,6 +217,40 @@ impl OutboxDelivery {
             claim: claim.clone(),
             resolved_at_unix_seconds: now_unix_seconds,
             disposition: ClaimDisposition::Acknowledged,
+            acknowledgement_evidence: None,
+        });
+        Ok(ResolutionOutcome::Applied)
+    }
+
+    /// Acknowledges a claim while retaining transport-neutral authentication
+    /// evidence in the same serialized delivery transition.
+    pub fn acknowledge_with_evidence(
+        &mut self,
+        queue: &OutboxQueue,
+        claim: &DeliveryClaim,
+        evidence: &AcknowledgementEvidence,
+        now_unix_seconds: u64,
+    ) -> Result<ResolutionOutcome, DeliveryError> {
+        self.validate(queue)?;
+        validate_acknowledgement_evidence(evidence)?;
+        self.check_time(now_unix_seconds)?;
+        if self.resolution_matches(claim, ClaimDisposition::Acknowledged) {
+            if self.last_acknowledgement_evidence() != Some(evidence) {
+                return Err(DeliveryError::InvalidRequest(
+                    "acknowledgementEvidenceMismatch",
+                ));
+            }
+            self.clock_watermark_unix_seconds = now_unix_seconds;
+            return Ok(ResolutionOutcome::Idempotent);
+        }
+        self.require_active(claim, now_unix_seconds)?;
+        self.clock_watermark_unix_seconds = now_unix_seconds;
+        self.advance(queue)?;
+        self.last_resolution = Some(ClaimResolution {
+            claim: claim.clone(),
+            resolved_at_unix_seconds: now_unix_seconds,
+            disposition: ClaimDisposition::Acknowledged,
+            acknowledgement_evidence: Some(evidence.clone()),
         });
         Ok(ResolutionOutcome::Applied)
     }
@@ -239,12 +285,23 @@ impl OutboxDelivery {
             claim: claim.clone(),
             resolved_at_unix_seconds: now_unix_seconds,
             disposition,
+            acknowledgement_evidence: None,
         });
         Ok(ResolutionOutcome::Applied)
     }
 
     pub fn pending_position(&self) -> (usize, usize) {
         (self.batch_cursor, self.record_cursor)
+    }
+
+    pub fn last_acknowledgement_evidence(&self) -> Option<&AcknowledgementEvidence> {
+        self.last_resolution.as_ref().and_then(|resolution| {
+            if matches!(resolution.disposition, ClaimDisposition::Acknowledged) {
+                resolution.acknowledgement_evidence.as_ref()
+            } else {
+                None
+            }
+        })
     }
 
     /// Rebases cursors after storage removes a prefix consisting exclusively
@@ -356,10 +413,20 @@ pub struct DeliveryClaim {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AcknowledgementEvidence {
+    pub receiver_id: String,
+    pub trust_policy_sha256: String,
+    pub delivery_sha256: String,
+    pub receipt_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ClaimResolution {
     claim: DeliveryClaim,
     resolved_at_unix_seconds: u64,
     disposition: ClaimDisposition,
+    acknowledgement_evidence: Option<AcknowledgementEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -414,6 +481,34 @@ fn validate_claim(claim: &DeliveryClaim, record: &OutboxRecord) -> Result<(), De
         return Err(DeliveryError::InvalidState("claimFields"));
     }
     Ok(())
+}
+
+fn validate_acknowledgement_evidence(
+    evidence: &AcknowledgementEvidence,
+) -> Result<(), DeliveryError> {
+    if evidence.receiver_id.is_empty()
+        || evidence.receiver_id.len() > 128
+        || !evidence.receiver_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b'-' | b':')
+        })
+        || !valid_digest(&evidence.trust_policy_sha256)
+        || !valid_digest(&evidence.delivery_sha256)
+        || !valid_digest(&evidence.receipt_sha256)
+    {
+        return Err(DeliveryError::InvalidRequest("acknowledgementEvidence"));
+    }
+    Ok(())
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 66
+        && value.starts_with("0x")
+        && value.as_bytes()[2..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && value.as_bytes()[2..].iter().any(|byte| *byte != b'0')
 }
 
 fn valid_token(value: &str) -> bool {
@@ -525,6 +620,42 @@ mod tests {
             DeliveryError::StaleClaim
         );
         assert_eq!(delivery, before);
+    }
+
+    #[test]
+    fn invalid_acknowledgement_evidence_is_rejected_atomically() {
+        let queue = queue_with_reorg();
+        let mut delivery = OutboxDelivery::new();
+        let (claim, _) = claimed(delivery.claim_next(&queue, 250, 10, &token(1)));
+        let before = delivery.clone();
+        for evidence in [
+            AcknowledgementEvidence {
+                receiver_id: "Receiver-1".into(),
+                trust_policy_sha256: hash('c'),
+                delivery_sha256: hash('a'),
+                receipt_sha256: hash('b'),
+            },
+            AcknowledgementEvidence {
+                receiver_id: "receiver-1".into(),
+                trust_policy_sha256: hash('c'),
+                delivery_sha256: hash('0'),
+                receipt_sha256: hash('b'),
+            },
+            AcknowledgementEvidence {
+                receiver_id: "receiver-1".into(),
+                trust_policy_sha256: hash('0'),
+                delivery_sha256: hash('a'),
+                receipt_sha256: hash('b'),
+            },
+        ] {
+            assert_eq!(
+                delivery
+                    .acknowledge_with_evidence(&queue, &claim, &evidence, 251)
+                    .unwrap_err(),
+                DeliveryError::InvalidRequest("acknowledgementEvidence")
+            );
+            assert_eq!(delivery, before);
+        }
     }
 
     #[test]

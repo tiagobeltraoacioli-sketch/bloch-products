@@ -19,9 +19,12 @@ will follow working implementations and retained evidence.
    contracts — implemented. Canonical producer-policy pinning, bounded safe
    outbox compaction, a strict transport-neutral read protocol/SDK, authenticated
    delivery/receipt envelopes, signed audit artifacts and bounded local
-   single-writer coordination are also implemented; authenticated network
-   transports, real receiver integration, externally operated audit retention
-   and distributed database/HA operation remain open.
+   single-writer coordination are also implemented. Authenticated receipts can
+   authorize a durable ACK with their evidence retained atomically in snapshot
+   v4. Strict offline delivery transport codecs and local hash-chained signed
+   audit retention are implemented; caller-operated network transports, a real
+   receiver, independently replicated/WORM retention and distributed
+   database/HA operation remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.

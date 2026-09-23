@@ -75,6 +75,23 @@ but deliberately does not mutate or acknowledge state. A receipt proves only
 that a configured receiver signed that acceptance; it does not prove finality
 or successful downstream processing.
 
+`bloch-indexer-receipt-ack` is the explicit mutation boundary. It authenticates
+the exact delivery and receipt against the pinned policy and claim before
+calling the lock-and-reload acknowledgement. Snapshot schema v4 stores the
+receiver ID plus canonical policy, delivery and receipt SHA-256 digests in the same
+atomic snapshot replacement as the resolution. The claim binds record ID,
+attempt and generation. Exact replay is idempotent; changed evidence,
+stale/expired claims and persistence failure fail closed.
+The lower-level core acknowledgement primitives do not authenticate receipts;
+an operator requiring authenticated acceptance must expose only this coordinator
+at its service boundary.
+
+`bloch-indexer-delivery-transport` adds strict, canonical and bounded offline
+request/response codecs around those authenticated payloads. It pins content
+types, protocol version, deployment domain and request correlation, but opens
+no socket and implements no HTTP or RPC client/server. Correlation IDs are not
+signatures; delivery and receipt authentication remains the security boundary.
+
 Fully acknowledged batch prefixes can be compacted atomically. Queue schema v2
 retains transition tombstones, batch commitments and a cumulative hash chain
 from the immutable anchor to the compacted tip. Pending or partially delivered
@@ -87,8 +104,16 @@ complete independently pinned audit policy digest, signer, domain, network,
 anchor and checkpoint contents. Retention and signer operation remain external,
 and neither the checksum nor signature proves chain finality.
 
-Snapshot schema v3 stores canonical state, compacted/pending outbox and delivery
-cursor together. It intentionally does not load v1 or v2 snapshots; no
+`bloch-indexer-audit-retention` stores signed artifacts as private create-once
+files in a locally hash-chained Unix directory. Full replay revalidates the
+policy pin, artifacts and signatures. A count and head hash retained outside
+the ledger detects tail truncation. This provides bounded local tamper evidence,
+not WORM storage, remote replication, multi-host coordination or finality; an
+operator must preserve the external expectation independently.
+
+Snapshot schema v4 stores canonical state, compacted/pending outbox, delivery
+cursor and authenticated acknowledgement evidence together. It intentionally
+does not load older snapshots; no
 production migration is claimed in this pre-deployment repository.
 
 On supported Unix systems, persisted mutations use a same-directory advisory
@@ -111,10 +136,13 @@ cargo test --locked --offline -p bloch-indexer-input
 cargo test --locked --offline -p bloch-indexer-query
 cargo test --locked --offline -p bloch-indexer-protocol
 cargo test --locked --offline -p bloch-indexer-delivery-protocol
+cargo test --locked --offline -p bloch-indexer-delivery-transport
+cargo test --locked --offline -p bloch-indexer-receipt-ack
 cargo test --locked --offline -p bloch-indexer-audit
+cargo test --locked --offline -p bloch-indexer-audit-retention
 ```
 
-The next indexer slices are authenticated transport adapters around these
-contracts, receiver-side delivery integration, externally operated audit
-retention and database-backed distributed coordination. High availability is
-not part of this file-snapshot implementation.
+The next indexer slices are caller-operated network adapters around these
+offline contracts, a real receiver service, independently replicated/WORM
+audit retention and database-backed distributed coordination. High availability
+is not part of this file-snapshot implementation.
