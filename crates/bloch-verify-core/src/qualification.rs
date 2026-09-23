@@ -6,7 +6,7 @@
 
 use crate::{
     AssessmentReport, NetworkIdentity, VerifyError, network_identity_sha256,
-    validate_network_identity,
+    organization_independence::VerifiedOrganizationIndependence, validate_network_identity,
 };
 use serde::{Deserialize, Serialize};
 
@@ -125,8 +125,8 @@ pub fn bloch_l2_700771_policy(
             QualificationGateDefinition {
                 gate_id: QualificationGateId::OrganizationIndependence,
                 evidence_schema: "bloch.verify.organization-independence-evidence.v1".into(),
-                verifier_id: "bloch-verify-org-independence.unavailable".into(),
-                verifier_status: VerifierStatus::NotImplemented,
+                verifier_id: "bloch-verify-core.organization-independence.v1".into(),
+                verifier_status: VerifierStatus::Implemented,
                 requirements: vec![
                     "legal identities and beneficial control are externally verified".into(),
                     "organizations have disjoint administrative control".into(),
@@ -171,8 +171,42 @@ pub fn evaluate_current_production_gates(
     assessed_network: &NetworkIdentity,
     expected_network: &NetworkIdentity,
 ) -> Result<ProductionQualificationReport, VerifyError> {
+    evaluate_production_gates(assessment, assessed_network, expected_network, None)
+}
+
+/// Evaluates production gates with a separately pinned, verified
+/// organizational-independence capability.
+///
+/// The expected policy digest must come from the reviewed release/control
+/// channel. Supplying evidence without that independent pin cannot pass the
+/// gate.
+pub fn evaluate_production_gates_with_organization_independence(
+    assessment: &AssessmentReport,
+    assessed_network: &NetworkIdentity,
+    expected_network: &NetworkIdentity,
+    expected_independence_policy_sha256: &str,
+    independence: &VerifiedOrganizationIndependence,
+) -> Result<ProductionQualificationReport, VerifyError> {
+    if independence.policy_sha256() != expected_independence_policy_sha256 {
+        return Err(VerifyError::TrustPolicyDigestMismatch);
+    }
+    evaluate_production_gates(
+        assessment,
+        assessed_network,
+        expected_network,
+        Some(independence),
+    )
+}
+
+fn evaluate_production_gates(
+    assessment: &AssessmentReport,
+    assessed_network: &NetworkIdentity,
+    expected_network: &NetworkIdentity,
+    independence: Option<&VerifiedOrganizationIndependence>,
+) -> Result<ProductionQualificationReport, VerifyError> {
     validate_network_identity(assessed_network, "assessedNetwork")?;
     let policy = bloch_l2_700771_policy(expected_network)?;
+    let expected_network_sha256 = network_identity_sha256(expected_network)?;
     let mut reasons = Vec::new();
     let gates = policy
         .gates
@@ -214,11 +248,32 @@ pub fn evaluate_current_production_gates(
                             )
                         }
                     }
-                    QualificationGateId::OrganizationIndependence => (
-                        GateDisposition::VerifierUnavailable,
-                        false,
-                        "no implemented verifier authenticates organizational independence".into(),
-                    ),
+                    QualificationGateId::OrganizationIndependence => match independence {
+                        Some(evidence)
+                            if evidence.ensure_monotonic_freshness().is_ok()
+                                && evidence.assessed_bundle_sha256()
+                                    == assessment.bundle_sha256
+                                && evidence.expected_network_sha256()
+                                    == expected_network_sha256
+                                && evidence.organization_ids().len() >= 3 =>
+                        {
+                            (
+                                GateDisposition::Passed,
+                                true,
+                                "threshold-attested organizational-control evidence matches the exact assessed bundle and reviewed network".into(),
+                            )
+                        }
+                        Some(_) => (
+                            GateDisposition::Failed,
+                            false,
+                            "organizational-independence evidence is stale or crosses the assessed bundle, reviewed network or minimum organization audience".into(),
+                        ),
+                        None => (
+                            GateDisposition::Failed,
+                            false,
+                            "verified organizational-independence evidence and its independently retained policy pin were not supplied".into(),
+                        ),
+                    },
                     QualificationGateId::CheckpointAncestry => (
                         GateDisposition::VerifierUnavailable,
                         false,
@@ -254,7 +309,7 @@ pub fn evaluate_current_production_gates(
         schema: QUALIFICATION_REPORT_SCHEMA.into(),
         profile_id: policy.profile_id,
         expected_network: policy.expected_network,
-        expected_network_sha256: network_identity_sha256(expected_network)?,
+        expected_network_sha256,
         assessed_network: assessed_network.clone(),
         source_assessment_schema: assessment.schema.into(),
         gates,
@@ -297,7 +352,7 @@ mod tests {
                 .iter()
                 .filter(|gate| gate.verifier_status == VerifierStatus::NotImplemented)
                 .count(),
-            3
+            2
         );
         let encoded = serde_json::to_vec(&policy).unwrap();
         let decoded: ProductionQualificationPolicy = serde_json::from_slice(&encoded).unwrap();
@@ -387,7 +442,9 @@ mod tests {
 
         assert!(qualification.gates[0].passed);
         assert!(qualification.gates[1].passed);
-        assert!(qualification.gates[2..].iter().all(|gate| {
+        assert!(!qualification.gates[2].passed);
+        assert_eq!(qualification.gates[2].disposition, GateDisposition::Failed);
+        assert!(qualification.gates[3..].iter().all(|gate| {
             !gate.passed && gate.disposition == GateDisposition::VerifierUnavailable
         }));
         assert!(!qualification.production_qualified);

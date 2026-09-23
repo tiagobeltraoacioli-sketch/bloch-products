@@ -165,6 +165,12 @@ impl ReplayProtectedRemoteCursorCasCallerAuthorization {
     pub fn canonical_request(&self) -> &[u8] {
         self.authorization.canonical_request()
     }
+    pub fn authorization_sha256(&self) -> &str {
+        self.authorization.authorization_sha256()
+    }
+    pub fn authority_ids(&self) -> &[String] {
+        self.authorization.authority_ids()
+    }
     pub fn challenge_consumption_sha256(&self) -> &str {
         self.challenge.consumption_sha256()
     }

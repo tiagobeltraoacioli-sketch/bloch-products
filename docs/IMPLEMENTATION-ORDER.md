@@ -76,7 +76,11 @@ will follow working implementations and retained evidence.
    fencing certificates are also verified against trusted time and an
    independently supplied epoch floor. None of these supplies signer custody,
    consensus, snapshot resistance, a linearizable lease issuer or the durable
-   independent floor. A canonical
+   independent floor. A crash-safe local floor store now produces an opaque
+   audience-bound floor, and an authoritative-CAS admission boundary requires
+   it together with the exact replay-protected caller authorization and fresh
+   writer lease before invoking an adapter. The store remains single-host and
+   the floor-to-CAS window is not atomic. A canonical
    external-anchor protocol is now composed into optional Data/Pay startup and
    can authenticate an independently retained monotonic generation and time
    boundary, but does not provide the TPM/WORM/remote counter itself. Canonical
@@ -84,7 +88,11 @@ will follow working implementations and retained evidence.
    request/response bytes to a fresh nonce. The preferred runtime path now
    composes those sessions before parsing external-anchor and remote-cursor
    responses, and an offline CLI can re-audit retained artifacts, but a live
-   qualified TLS adapter must still derive the handshake claims. Independent
+   qualified TLS adapter must still derive the handshake claims. A strict
+   fetch-adapter contract now exposes the pinned handshake parameters, external
+   mTLS key handle, deadline and bounded ingress while forbidding cache use; it
+   does not implement or qualify DNS, sockets, TLS, HSM access or egress.
+   Independent
    rollback-resistant retention, suspend/resume qualification, replicated
    remote deployment, operational trust roots, encryption and multi-host HA
    remain open.

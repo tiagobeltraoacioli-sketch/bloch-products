@@ -1,0 +1,16 @@
+[package]
+name = "bloch-authenticated-fetch-adapter"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-authenticated-transport-evidence = { path = "../bloch-authenticated-transport-evidence" }
+bloch-authenticated-transport-session = { path = "../bloch-authenticated-transport-session" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+hex.workspace = true
+serde_json.workspace = true

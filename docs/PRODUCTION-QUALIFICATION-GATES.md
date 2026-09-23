@@ -8,7 +8,7 @@ profile is `bloch-l2-700771-production.v1` and requires every gate below.
 | --- | --- | --- |
 | Network identity | `bloch.verify.network-identity.v1` | Implemented |
 | Authenticated comparison | `bloch.verify.signed-checkpoint-bundle.v1` | Implemented |
-| Organization independence | `bloch.verify.organization-independence-evidence.v1` | Not implemented |
+| Organization independence | `bloch.verify.organization-independence-evidence.v1` | Implemented library verifier; CLI composition pending |
 | Checkpoint ancestry | `bloch.verify.checkpoint-ancestry-proof.v1` | Not implemented |
 | Consensus finality | `bloch.verify.consensus-finality-proof.v1` | Not implemented |
 
@@ -16,6 +16,20 @@ An evidence schema name is a future interoperability contract, not proof that
 the verifier supports it. An unsupported gate is emitted as
 `verifierUnavailable`, never as passed. Opaque references and caller-provided
 booleans cannot upgrade a gate.
+
+The organizational-independence verifier accepts only canonical evidence signed
+by the threshold in a separately pinned reviewer policy. The policy requires at
+least three assessed organizations, distinct organization control domains and
+reviewers whose organizations, control domains and keys are mutually distinct
+and disjoint from the assessed organizations. The capability is bound to the
+exact signed-bundle digest and reviewed-network digest. This authenticates the
+reviewers' claims; it cannot inspect a company registry, beneficial ownership,
+infrastructure tenancy or HSM custody. Those facts and the reviewer-policy pin
+must be established and retained outside the assessed hosts.
+
+The default evaluator still fails this gate when the verified capability and
+its independent policy pin are absent. The current offline CLI does not yet
+compose that capability into its report.
 
 The caller must provide the reviewed production `NetworkIdentity`; the profile
 accepts only chain ID `700771` and pins the supplied genesis hash without
@@ -25,8 +39,8 @@ gate.
 
 The qualification evaluator also refuses to elevate the underlying assessment:
 its result can be true only if the source assessment is already production
-qualified and every required gate passes. With the current implementation,
-`productionQualified` is therefore always false.
+qualified and every required gate passes. Checkpoint ancestry and consensus
+finality remain unavailable, so `productionQualified` is still always false.
 
 ## Offline qualification command
 

@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bloch-authenticated-fetch-adapter"
+version = "0.1.0"
+dependencies = [
+ "bloch-authenticated-transport-evidence",
+ "bloch-authenticated-transport-session",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-authenticated-transport-evidence"
 version = "0.1.0"
 dependencies = [
@@ -230,6 +243,24 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-authoritative-cas"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-caller-auth",
+ "bloch-local-state-remote-cursor-challenge-store",
+ "bloch-local-state-store",
+ "bloch-local-state-writer-epoch-floor-store",
+ "bloch-local-state-writer-fencing",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
  "sha2",
  "thiserror",
 ]
@@ -524,6 +555,22 @@ dependencies = [
  "bloch-local-state-cursor",
  "bloch-local-state-remote-cursor",
  "bloch-local-state-store",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-writer-epoch-floor-store"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-writer-fencing",
+ "bloch-trusted-time",
  "ed25519-dalek",
  "getrandom",
  "hex",

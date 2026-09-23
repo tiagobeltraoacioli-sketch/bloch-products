@@ -13,6 +13,10 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-verify-core`: strict evidence schema, canonical digest and assessment.
 - External operator trust policies pinned by an independently retained SHA-256.
 - Domain-separated Ed25519 verification for exact node observations.
+- Threshold-attested organizational-independence claims bind one exact signed
+  bundle and reviewed network to a separately pinned reviewer policy, with
+  structural separation of legal, administrative, infrastructure and signing
+  controls. External legal facts still require independent validation.
 - Create-once detached-signature requests and signed-bundle assembly.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
@@ -141,6 +145,10 @@ identity, prove finality, activate a network, or authorize asset movement.
   an in-memory CSPRNG nonce, exact request/response byte binding, monotonic
   deadline and opaque verified response. The callback still must provide the
   qualified live TLS adapter and truthful handshake evidence.
+- `bloch-authenticated-fetch-adapter`: fail-closed contract for a live fetcher,
+  fixing endpoint/TLS/mTLS observations, external key handles, exact bounded
+  ingress and a no-cache rule before authenticated transport verification.
+  DNS, sockets, TLS and HSM operation remain deployment responsibilities.
 - `bloch-local-state-remote-cursor-cas-session`: exact authenticated CAS
   exchange requiring a fresh threshold caller authorization and returning an
   opaque capability only after the signed receipt matches the canonical
@@ -188,6 +196,14 @@ identity, prove finality, activate a network, or authorize asset movement.
   bound to state, remote-cursor and CAS audiences, checked against trusted time
   and an independently retained epoch floor. It verifies certificates; it
   neither elects a writer nor provides consensus or the independent floor.
+- `bloch-local-state-writer-epoch-floor-store`: create-once, crash-safe
+  single-host retention of the highest locally accepted writer epoch, exposing
+  only an opaque audience-bound floor capability. It is not WORM or resistant
+  to host, filesystem or VM snapshot rollback.
+- `bloch-local-state-authoritative-cas`: callback-scoped admission requiring an
+  exact replay-protected caller authorization, fresh writer lease and opaque
+  lower epoch floor. It binds their evidence into one operation digest but does
+  not make the callback linearizable or close the floor-to-CAS atomicity gap.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.

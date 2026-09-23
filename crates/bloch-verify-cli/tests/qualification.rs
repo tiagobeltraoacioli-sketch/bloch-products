@@ -53,7 +53,8 @@ fn qualification_cli_binds_network_digest_and_keeps_unavailable_gates_closed() {
     assert_eq!(report["expectedNetworkSha256"], network_digest);
     assert_eq!(report["gates"][0]["passed"], true);
     assert_eq!(report["gates"][1]["passed"], true);
-    assert_eq!(report["gates"][2]["disposition"], "verifierUnavailable");
+    assert_eq!(report["gates"][2]["disposition"], "failed");
+    assert_eq!(report["gates"][3]["disposition"], "verifierUnavailable");
     assert_eq!(report["productionQualified"], false);
 
     let refused_path = root.join("refused.json");

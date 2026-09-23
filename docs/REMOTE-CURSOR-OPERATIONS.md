@@ -91,7 +91,12 @@ malformed chains, replay conflicts and generation equivocation. Writer fencing
 certificates bind an epoch to the same state and CAS audiences and must advance
 an independently retained floor before use. The authoritative CAS service
 still has to enforce that lease; the library neither issues leases nor persists
-the floor.
+the independent floor. A local reference floor store now returns a non-cloneable
+capability containing the complete audience and canonical state/evidence
+digests. The authoritative-CAS admission boundary consumes the exact
+replay-protected caller authorization, checks a fresh lease strictly above that
+floor, and releases only a callback-scoped operation. Loading the floor and
+performing the CAS are still not one atomic replicated transaction.
 Challenge transport, snapshot-resistant replay tracking, external signer
 custody and a replicated linearizable challenge/CAS service remain external.
 The reference core returns unsigned decision material and is not a network

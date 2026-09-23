@@ -1,0 +1,21 @@
+[package]
+name = "bloch-local-state-authoritative-cas"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-local-state-remote-cursor-caller-auth = { path = "../bloch-local-state-remote-cursor-caller-auth" }
+bloch-local-state-writer-epoch-floor-store = { path = "../bloch-local-state-writer-epoch-floor-store" }
+bloch-local-state-writer-fencing = { path = "../bloch-local-state-writer-fencing" }
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-remote-cursor-challenge-store = { path = "../bloch-local-state-remote-cursor-challenge-store" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
+ed25519-dalek.workspace = true
+hex.workspace = true
