@@ -29,3 +29,46 @@ high-availability service. A host/filesystem/VM snapshot can roll this
 single-host state back; deployments still need independent replication and
 anti-rollback evidence. An I/O error after rename is ambiguous: keep the
 operation offline and reload it before retrying.
+
+## Offline CLI
+
+`bloch-receipt-staging` is an offline operator tool. It never receives a
+private key and performs no network I/O. `inspect` prints only non-secret
+metadata: it omits the canonical request, signing message, receipt bytes, and
+signatures. Signing material is only written to an explicitly selected,
+create-once owner-only file:
+
+```console
+bloch-receipt-staging inspect --store /secure/receipt-operation
+bloch-receipt-staging export-signing-request \
+  --store /secure/receipt-operation \
+  --out /secure/transfer/receipt-signing-request.json
+```
+
+The export is canonical JSON and is bound to the staged request, decision,
+decision time, policy pin/domain, and state identity. Existing output files,
+symlinks, unsafe staging stores, and non-owner-only input files fail closed.
+The output directory itself must be a real, operator-owned `0700` directory;
+the CLI validates it before creation and again after file and directory fsync.
+
+The CLI intentionally cannot reconstruct the opaque `ControlPlaneDecision` or
+`VerifiedTrustedTime` required by the preferred production API. Consequently,
+its only import command is conspicuously ceremony-only and requires an
+operator-supplied evaluation time plus an explicit acknowledgement:
+
+```console
+bloch-receipt-staging ceremony-import-receipt \
+  --store /secure/receipt-operation \
+  --policy /secure/pins/remote-cursor-policy.json \
+  --policy-sha256 0xREVIEWED_SHA256 \
+  --receipt /secure/transfer/signed-receipt.json \
+  --evaluated-at-unix-seconds REVIEWED_UNIX_TIME \
+  --acknowledge-operator-time-is-not-production
+```
+
+That path verifies the canonical policy and receipt and binds them to the
+immutable operation already staged. It is not a production admission path:
+operator wall-clock input is not trusted time. Production callers must use
+`import_remote_cursor_cas_receipt_with_trusted_time` or
+`import_remote_cursor_cas_signatures_with_trusted_time` in-process with the
+opaque capabilities obtained from the control plane and trusted-time verifier.

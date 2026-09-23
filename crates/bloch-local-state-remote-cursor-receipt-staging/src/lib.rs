@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub const RECEIPT_STAGING_SCHEMA: &str = "bloch.products.remote-cursor-receipt-staging.v1";
+pub const RECEIPT_SIGNING_REQUEST_SCHEMA: &str =
+    "bloch.products.remote-cursor-receipt-signing-request.v1";
 const MAX_STATE_BYTES: u64 = 256 * 1024;
 #[cfg(unix)]
 const MAX_LOCK_WAIT: Duration = Duration::from_millis(250);
@@ -72,6 +74,38 @@ pub struct StagedReceipt {
     receipt_bytes: Vec<u8>,
 }
 
+/// Non-secret metadata suitable for operational inspection. Exact request,
+/// signing-message, receipt, and signatures are deliberately omitted.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptStagingInspection {
+    pub schema: &'static str,
+    pub state_identity: String,
+    pub remote_cursor_policy_sha256: String,
+    pub request_sha256: String,
+    pub decision: RemoteCursorCasDecision,
+    pub decided_at_unix_seconds: u64,
+    pub signing_message_sha256: String,
+    pub receipt_sha256: Option<String>,
+}
+
+/// Canonical artifact transferred to an offline signer. This contains no
+/// private key or signature, but the signing message is ceremony material and
+/// should be exported only to an owner-only file.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReceiptSigningRequest {
+    pub schema: String,
+    pub state_identity: String,
+    pub remote_cursor_policy_sha256: String,
+    pub signature_domain: String,
+    pub request_sha256: String,
+    pub decision: RemoteCursorCasDecision,
+    pub decided_at_unix_seconds: u64,
+    pub signing_message_sha256: String,
+    pub signing_message_hex: String,
+}
+
 impl StagedReceipt {
     pub fn receipt_sha256(&self) -> &str {
         &self.receipt_sha256
@@ -114,6 +148,58 @@ pub enum ReceiptStagingError {
     Receipt(#[from] RemoteCursorCasError),
     #[error("receipt staging I/O failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Reads validated staging metadata without exposing the staged payloads.
+#[cfg(unix)]
+pub fn inspect_receipt_staging(
+    store: &Path,
+) -> Result<ReceiptStagingInspection, ReceiptStagingError> {
+    let directory = open_store(store)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    let state = read_state(&directory)?.ok_or(ReceiptStagingError::StateMissing)?;
+    Ok(ReceiptStagingInspection {
+        schema: RECEIPT_STAGING_SCHEMA,
+        state_identity: state.state_identity,
+        remote_cursor_policy_sha256: state.remote_cursor_policy_sha256,
+        request_sha256: state.request_sha256,
+        decision: state.decision,
+        decided_at_unix_seconds: state.decided_at_unix_seconds,
+        signing_message_sha256: state.signing_message_sha256,
+        receipt_sha256: state.receipt_sha256,
+    })
+}
+
+/// Returns the exact canonical signing request for create-once file export.
+#[cfg(unix)]
+pub fn export_receipt_signing_request(store: &Path) -> Result<Vec<u8>, ReceiptStagingError> {
+    let directory = open_store(store)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    let state = read_state(&directory)?.ok_or(ReceiptStagingError::StateMissing)?;
+    let export = ReceiptSigningRequest {
+        schema: RECEIPT_SIGNING_REQUEST_SCHEMA.into(),
+        state_identity: state.state_identity,
+        remote_cursor_policy_sha256: state.remote_cursor_policy_sha256,
+        signature_domain: state.signature_domain,
+        request_sha256: state.request_sha256,
+        decision: state.decision,
+        decided_at_unix_seconds: state.decided_at_unix_seconds,
+        signing_message_sha256: state.signing_message_sha256,
+        signing_message_hex: format!("0x{}", hex_string(&state.signing_message)),
+    };
+    serde_json::to_vec(&export).map_err(|_| ReceiptStagingError::InvalidState)
+}
+
+#[cfg(not(unix))]
+pub fn inspect_receipt_staging(_: &Path) -> Result<ReceiptStagingInspection, ReceiptStagingError> {
+    Err(ReceiptStagingError::UnsupportedPlatform)
+}
+
+#[cfg(not(unix))]
+pub fn export_receipt_signing_request(_: &Path) -> Result<Vec<u8>, ReceiptStagingError> {
+    Err(ReceiptStagingError::UnsupportedPlatform)
 }
 
 /// Preferred preparation path: the request, decision, and decision time come
@@ -285,6 +371,64 @@ pub fn import_remote_cursor_cas_receipt(
     receipt_bytes: &[u8],
 ) -> Result<StagedReceipt, ReceiptStagingError> {
     import_receipt_core(store, import, receipt_bytes, || Ok(()))
+}
+
+/// Explicit offline-ceremony compatibility path. It binds the import to the
+/// immutable operation already in the store, but its evaluation time is
+/// operator supplied and therefore this function is not a production gate.
+#[cfg(unix)]
+pub fn ceremony_import_receipt_with_operator_time(
+    store: &Path,
+    policy: &RemoteCursorPolicy,
+    expected_policy_sha256: &str,
+    receipt_bytes: &[u8],
+    evaluated_at_unix_seconds: u64,
+) -> Result<StagedReceipt, ReceiptStagingError> {
+    let directory = open_store(store)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    let state = read_state(&directory)?.ok_or(ReceiptStagingError::StateMissing)?;
+    drop(_lock);
+    drop(directory);
+    if state.remote_cursor_policy_sha256 != expected_policy_sha256
+        || state.state_identity != policy.state_identity
+        || state.signature_domain != policy.signature_domain
+    {
+        return Err(ReceiptStagingError::Conflict);
+    }
+    let expected = make_pending(
+        &state.request_bytes,
+        policy,
+        expected_policy_sha256,
+        &state.decision,
+        state.decided_at_unix_seconds,
+    )?;
+    if !same_operation(&state, &expected) {
+        return Err(ReceiptStagingError::Conflict);
+    }
+    import_remote_cursor_cas_receipt(
+        store,
+        ReceiptImport {
+            request_bytes: &state.request_bytes,
+            policy,
+            expected_policy_sha256,
+            decision: &state.decision,
+            decided_at_unix_seconds: state.decided_at_unix_seconds,
+            evaluated_at_unix_seconds,
+        },
+        receipt_bytes,
+    )
+}
+
+#[cfg(not(unix))]
+pub fn ceremony_import_receipt_with_operator_time(
+    _: &Path,
+    _: &RemoteCursorPolicy,
+    _: &str,
+    _: &[u8],
+    _: u64,
+) -> Result<StagedReceipt, ReceiptStagingError> {
+    Err(ReceiptStagingError::UnsupportedPlatform)
 }
 
 #[cfg(unix)]
@@ -956,7 +1100,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const NONCE: &str = "staging_nonce_0123456789abcdef0123456789abcdef";
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1381,10 +1525,16 @@ mod tests {
             let r = receipt.clone();
             let d = decision.clone();
             threads.push(std::thread::spawn(move || {
-                import_remote_cursor_cas_receipt(&f.store, f.import(&d), &r)
-                    .unwrap()
-                    .receipt_sha256()
-                    .to_owned()
+                let retry_deadline = Instant::now() + Duration::from_secs(3);
+                loop {
+                    match import_remote_cursor_cas_receipt(&f.store, f.import(&d), &r) {
+                        Ok(staged) => break staged.receipt_sha256().to_owned(),
+                        Err(ReceiptStagingError::StoreBusy) if Instant::now() < retry_deadline => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("concurrent exact import failed: {error}"),
+                    }
+                }
             }));
         }
         let a = threads.remove(0).join().unwrap();
@@ -1489,5 +1639,78 @@ mod tests {
             ),
             Err(ReceiptStagingError::TrustedTimeExpired)
         ));
+    }
+
+    #[test]
+    fn inspection_omits_payloads_and_signing_export_is_canonical() {
+        let f = Fixture::new();
+        let decision = RemoteCursorCasDecision::Accepted;
+        let prepared = prepare_remote_cursor_cas_receipt(
+            &f.store, &f.request, &f.policy, &f.pin, &decision, 210,
+        )
+        .unwrap();
+        let inspection = inspect_receipt_staging(&f.store).unwrap();
+        let inspection_bytes = serde_json::to_vec(&inspection).unwrap();
+        assert_eq!(inspection.request_sha256, prepared.request_sha256());
+        assert!(
+            !inspection_bytes
+                .windows(b"requestBytes".len())
+                .any(|window| window == b"requestBytes")
+        );
+        assert!(
+            !inspection_bytes
+                .windows(b"signingMessageHex".len())
+                .any(|window| window == b"signingMessageHex")
+        );
+
+        let bytes = export_receipt_signing_request(&f.store).unwrap();
+        let export: ReceiptSigningRequest = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&export).unwrap(), bytes);
+        assert_eq!(
+            export.signing_message_sha256,
+            prepared.signing_message_sha256()
+        );
+        assert_eq!(
+            export.signing_message_hex,
+            format!("0x{}", hex_string(prepared.signing_message()))
+        );
+        let mut noncanonical = bytes;
+        noncanonical.push(b'\n');
+        let decoded: ReceiptSigningRequest = serde_json::from_slice(&noncanonical).unwrap();
+        assert_ne!(serde_json::to_vec(&decoded).unwrap(), noncanonical);
+    }
+
+    #[test]
+    fn ceremony_import_is_exactly_bound_to_staged_operation() {
+        let f = Fixture::new();
+        let decision = RemoteCursorCasDecision::Accepted;
+        prepare_remote_cursor_cas_receipt(&f.store, &f.request, &f.policy, &f.pin, &decision, 210)
+            .unwrap();
+        let receipt = create_remote_cursor_cas_receipt(
+            &f.request,
+            &f.policy,
+            &f.pin,
+            &decision,
+            210,
+            &f.signatures(&decision),
+        )
+        .unwrap();
+        let staged =
+            ceremony_import_receipt_with_operator_time(&f.store, &f.policy, &f.pin, &receipt, 220)
+                .unwrap();
+        assert_eq!(staged.receipt_bytes(), receipt);
+
+        let mut wrong_policy = f.policy.clone();
+        wrong_policy.signature_domain.push_str("-wrong");
+        assert!(
+            ceremony_import_receipt_with_operator_time(
+                &f.store,
+                &wrong_policy,
+                &f.pin,
+                &receipt,
+                220
+            )
+            .is_err()
+        );
     }
 }

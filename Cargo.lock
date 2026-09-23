@@ -22,6 +22,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-authenticated-transport-session"
+version = "0.1.0"
+dependencies = [
+ "bloch-authenticated-transport-evidence",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-data-governance"
 version = "0.1.0"
 dependencies = [
@@ -335,6 +348,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-remote-cursor-quorum-session"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-replica-quorum",
+ "bloch-local-state-remote-session",
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
  "thiserror",
 ]
 

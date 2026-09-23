@@ -73,11 +73,16 @@ Crash-safe create-once staging can preserve exact decision signing material and
 import a matching threshold receipt without taking private keys. An offline
 quorum verifier can compare distinct authenticated replica observations using
 absolute trusted-time freshness and reject split-brain evidence. It does not
-establish replica independence, run consensus or fence writers. Challenge
-transport, snapshot-resistant replay tracking, external signer custody and a
-replicated linearizable challenge/CAS service remain external. The reference
-core returns unsigned decision material and is not a network service or signing
-authority. Therefore this sequence remains an
+establish replica independence, run consensus or fence writers. A bounded
+collector now requests every configured replica with a distinct in-memory
+nonce, exact signer-set binding and global/per-replica deadlines, returning no
+raw or partial fallback. Receipt signing requests can be exported as canonical
+owner-only create-once files; the CLI's manual-time receipt import is ceremony
+only and cannot satisfy the production trusted-time gate. Challenge transport,
+snapshot-resistant replay tracking, external signer custody and a replicated
+linearizable challenge/CAS service remain external. The reference core returns
+unsigned decision material and is not a network service or signing authority.
+Therefore this sequence remains an
 implementation contract, not deployment evidence, and production activation
 is blocked. Even a valid signed acceptance receipt must be followed by a fresh
 authenticated cursor observation matching the exact successor.

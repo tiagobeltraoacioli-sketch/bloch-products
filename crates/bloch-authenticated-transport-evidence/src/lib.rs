@@ -127,6 +127,28 @@ pub struct TransportEvidenceExpectation<'a> {
     pub response_bytes: u64,
 }
 
+/// Exact byte exchange used by adapters that must not supply their own
+/// request/response digests. The nonce is still the independently generated
+/// 256-bit challenge encoded in the protocol's canonical hexadecimal form.
+#[derive(Clone, Copy, Debug)]
+pub struct TransportExchangeParameters<'a> {
+    pub request_nonce: &'a str,
+    pub request_bytes: &'a [u8],
+    pub response_bytes: &'a [u8],
+    pub round_trip_millis: u64,
+    pub observed_at_unix_seconds: u64,
+    pub cipher_suite: &'a str,
+    pub server_spki_sha256: &'a str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TransportExchangeExpectation<'a> {
+    pub purpose: TransportPurpose,
+    pub request_nonce: &'a str,
+    pub request_bytes: &'a [u8],
+    pub response_bytes: &'a [u8],
+}
+
 /// Opaque proof that configured attestors authenticated one exact exchange.
 #[derive(Debug)]
 pub struct VerifiedAuthenticatedTransportEvidence {
@@ -234,6 +256,33 @@ pub fn transport_evidence_signature_message(
     signing_bytes(&envelope(policy, expected_policy_sha256, parameters)?)
 }
 
+/// Builds the attestor message while deriving both payload digests and the
+/// response length from the exact transported bytes.
+pub fn transport_evidence_signature_message_for_exchange(
+    policy: &AuthenticatedTransportPolicy,
+    expected_policy_sha256: &str,
+    exchange: TransportExchangeParameters<'_>,
+) -> Result<Vec<u8>, TransportEvidenceError> {
+    let request_sha256 = hash(exchange.request_bytes);
+    let response_sha256 = hash(exchange.response_bytes);
+    let response_bytes = u64::try_from(exchange.response_bytes.len())
+        .map_err(|_| TransportEvidenceError::InvalidEvidence)?;
+    transport_evidence_signature_message(
+        policy,
+        expected_policy_sha256,
+        TransportEvidenceParameters {
+            request_nonce: exchange.request_nonce,
+            request_sha256: &request_sha256,
+            response_sha256: &response_sha256,
+            response_bytes,
+            round_trip_millis: exchange.round_trip_millis,
+            observed_at_unix_seconds: exchange.observed_at_unix_seconds,
+            cipher_suite: exchange.cipher_suite,
+            server_spki_sha256: exchange.server_spki_sha256,
+        },
+    )
+}
+
 pub fn create_authenticated_transport_evidence(
     policy: &AuthenticatedTransportPolicy,
     expected_policy_sha256: &str,
@@ -256,6 +305,35 @@ pub fn create_authenticated_transport_evidence(
         return Err(TransportEvidenceError::InvalidEvidence);
     }
     Ok(bytes)
+}
+
+/// Creates canonical evidence while deriving the exchange digests and length
+/// internally. This is the preferred construction API for a qualified adapter.
+pub fn create_authenticated_transport_evidence_for_exchange(
+    policy: &AuthenticatedTransportPolicy,
+    expected_policy_sha256: &str,
+    exchange: TransportExchangeParameters<'_>,
+    signatures: &[TransportEvidenceSignature],
+) -> Result<Vec<u8>, TransportEvidenceError> {
+    let request_sha256 = hash(exchange.request_bytes);
+    let response_sha256 = hash(exchange.response_bytes);
+    let response_bytes = u64::try_from(exchange.response_bytes.len())
+        .map_err(|_| TransportEvidenceError::InvalidEvidence)?;
+    create_authenticated_transport_evidence(
+        policy,
+        expected_policy_sha256,
+        TransportEvidenceParameters {
+            request_nonce: exchange.request_nonce,
+            request_sha256: &request_sha256,
+            response_sha256: &response_sha256,
+            response_bytes,
+            round_trip_millis: exchange.round_trip_millis,
+            observed_at_unix_seconds: exchange.observed_at_unix_seconds,
+            cipher_suite: exchange.cipher_suite,
+            server_spki_sha256: exchange.server_spki_sha256,
+        },
+        signatures,
+    )
 }
 
 pub fn verify_authenticated_transport_evidence(
@@ -337,6 +415,35 @@ pub fn verify_authenticated_transport_evidence(
             .collect(),
         monotonic_deadline,
     })
+}
+
+/// Verifies evidence against exact request and response bytes, deriving every
+/// payload digest and the response length internally. Callers should prefer
+/// this over assembling [`TransportEvidenceExpectation`] themselves.
+pub fn verify_authenticated_transport_exchange_evidence(
+    evidence_bytes: &[u8],
+    policy: &AuthenticatedTransportPolicy,
+    expected_policy_sha256: &str,
+    exchange: TransportExchangeExpectation<'_>,
+    trusted_time: &VerifiedTrustedTime,
+) -> Result<VerifiedAuthenticatedTransportEvidence, TransportEvidenceError> {
+    let request_sha256 = hash(exchange.request_bytes);
+    let response_sha256 = hash(exchange.response_bytes);
+    let response_len = u64::try_from(exchange.response_bytes.len())
+        .map_err(|_| TransportEvidenceError::ExchangeMismatch)?;
+    verify_authenticated_transport_evidence(
+        evidence_bytes,
+        policy,
+        expected_policy_sha256,
+        TransportEvidenceExpectation {
+            purpose: exchange.purpose,
+            request_nonce: exchange.request_nonce,
+            request_sha256: &request_sha256,
+            response_sha256: &response_sha256,
+            response_bytes: response_len,
+        },
+        trusted_time,
+    )
 }
 
 fn envelope(

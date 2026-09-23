@@ -6,6 +6,9 @@ purpose, DNS endpoint and port, TLS 1.3, ALPN, allowed cipher suites, server
 SPKI pins, client SPKI identity, response limit, round-trip limit and attestor
 threshold. Evidence binds the exact request nonce plus request/response digests
 and is evaluated with `VerifiedTrustedTime`, never an operator wall clock.
+The preferred exchange APIs accept the exact request and response byte slices
+and derive both digests and the response length internally, so an adapter
+cannot accidentally authenticate hashes assembled from different payloads.
 
 The returned capability is opaque, non-cloneable and expires on a monotonic
 deadline bounded by the evidence age, policy expiry and trusted-time expiry.

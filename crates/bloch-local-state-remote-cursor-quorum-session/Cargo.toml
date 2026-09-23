@@ -1,0 +1,17 @@
+[package]
+name = "bloch-local-state-remote-cursor-quorum-session"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-local-state-remote-cursor-replica-quorum = { path = "../bloch-local-state-remote-cursor-replica-quorum" }
+bloch-local-state-remote-session = { path = "../bloch-local-state-remote-session" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+hex.workspace = true

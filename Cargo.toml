@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/bloch-authenticated-transport-evidence",
+  "crates/bloch-authenticated-transport-session",
   "crates/bloch-data-governance",
   "crates/bloch-indexer-audit",
   "crates/bloch-indexer-audit-retention",
@@ -23,6 +24,7 @@ members = [
   "crates/bloch-local-state-remote-cursor-challenge-store",
   "crates/bloch-local-state-remote-cursor-caller-auth",
   "crates/bloch-local-state-remote-cursor-control-plane",
+  "crates/bloch-local-state-remote-cursor-quorum-session",
   "crates/bloch-local-state-remote-cursor-receipt-staging",
   "crates/bloch-local-state-remote-cursor-replica-quorum",
   "crates/bloch-local-state-remote-session",

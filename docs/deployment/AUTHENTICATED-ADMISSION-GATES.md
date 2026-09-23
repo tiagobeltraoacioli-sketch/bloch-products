@@ -12,8 +12,10 @@ single-host one-time CAS challenge store also exist. Optional runtime startup
 now composes the external anchor before advancing the local time boundary.
 Threshold transport-evidence verification, crash-safe receipt staging and an
 absolute-time replica-quorum comparison also exist as offline building blocks.
-A live qualified transport adapter, independent rollback-resistant root,
-replicated linearizable remote service, authority signing boundary and
+A one-shot bounded transport session binds exact bytes to a fresh nonce, and a
+bounded collector performs fresh all-replica acquisition without a partial
+fallback. A live qualified transport adapter, independent rollback-resistant
+root, replicated linearizable remote service, authority signing boundary and
 production systemd composition are not deployed or qualified.
 
 The existing `bloch-products-synthetic-store-check@.service` is
@@ -233,14 +235,14 @@ require a separate authority-approved recovery or re-genesis ceremony.
 
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
-| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition, threshold transport-evidence profile and negative tests exist; live qualified adapter/systemd integration evidence remains |
+| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition, byte-derived threshold evidence, one-shot bounded session and negative tests exist; live qualified TLS adapter/systemd integration evidence remains |
 | P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition, single-host monotonic store and runtime-composed external-anchor verification exist; independently operated anti-rollback retention/channel, suspend/resume qualification and host tests remain |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host core, durable one-time challenges, trusted-time authorization, crash-safe receipt staging and time-bounded replica comparison exist; replicated consensus/fencing service, external signer operation and qualification remain |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host core, durable one-time challenges, trusted-time authorization, crash-safe receipt staging/offline export and fresh all-replica comparison exist; replicated consensus/fencing service, external signer operation and qualification remain |
 | P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
 | P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed, has no install relationship and CI rejects production-target dependencies/aliases; target-host composition evidence remains |
 | P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations and non-installable checked Data/Pay unit specifications exist; target-host UID, unit and ownership evidence remains |
 | P1 | Exact credential names and provenance | **Partial** | Exact Data/Pay specification manifests and adversarial static tests exist; real systemd credential integration and target-host evidence remain |
-| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session and bounded-ingress tests exist; qualified adapter, repeated-start, reboot and transport-failure evidence remain |
+| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only cursor/transport/quorum sessions and bounded-ingress tests exist; qualified live adapter, repeated-start, reboot and transport-failure evidence remain |
 | P1 | Explicit Data/Pay state-identity mapping | **Partial** | Library cross-identity tests exist; deployed cross-product/cross-tenant evidence remains |
 | P1 | Re-bootstrap maintenance and installation runbook | **Partial** | Fencing/install drill and independently retained evidence |
 

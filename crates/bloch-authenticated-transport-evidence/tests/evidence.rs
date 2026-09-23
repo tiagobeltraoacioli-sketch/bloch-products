@@ -1,9 +1,11 @@
 use bloch_authenticated_transport_evidence::{
     AuthenticatedTransportPolicy, TRANSPORT_POLICY_SCHEMA, TransportAuthority,
     TransportEvidenceError, TransportEvidenceExpectation, TransportEvidenceParameters,
-    TransportEvidenceSignature, TransportPurpose, authenticated_transport_policy_sha256,
-    create_authenticated_transport_evidence, transport_evidence_signature_message,
-    verify_authenticated_transport_evidence,
+    TransportEvidenceSignature, TransportExchangeExpectation, TransportExchangeParameters,
+    TransportPurpose, authenticated_transport_policy_sha256,
+    create_authenticated_transport_evidence, create_authenticated_transport_evidence_for_exchange,
+    transport_evidence_signature_message, transport_evidence_signature_message_for_exchange,
+    verify_authenticated_transport_evidence, verify_authenticated_transport_exchange_evidence,
 };
 use bloch_trusted_time::{
     TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
@@ -177,6 +179,78 @@ fn request_nonce_digest_and_size_substitution_fail_closed() {
                 &fixture.policy,
                 &fixture.pin,
                 changed,
+                &trusted,
+            )
+            .unwrap_err(),
+            TransportEvidenceError::ExchangeMismatch
+        );
+    }
+}
+
+#[test]
+fn byte_derived_api_binds_the_exact_request_and_response() {
+    let fixture = Fixture::new(IDENTITY);
+    let request = br#"{"operation":"cursor"}"#;
+    let response = br#"{"generation":7}"#;
+    let exchange = TransportExchangeParameters {
+        request_nonce: NONCE,
+        request_bytes: request,
+        response_bytes: response,
+        round_trip_millis: 125,
+        observed_at_unix_seconds: 1_120,
+        cipher_suite: "TLS_AES_128_GCM_SHA256",
+        server_spki_sha256: SERVER_PIN,
+    };
+    let message =
+        transport_evidence_signature_message_for_exchange(&fixture.policy, &fixture.pin, exchange)
+            .unwrap();
+    let signatures = fixture
+        .transport_keys
+        .iter()
+        .take(2)
+        .enumerate()
+        .map(|(index, key)| TransportEvidenceSignature {
+            authority_id: format!("transport-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let evidence = create_authenticated_transport_evidence_for_exchange(
+        &fixture.policy,
+        &fixture.pin,
+        exchange,
+        &signatures,
+    )
+    .unwrap();
+    let trusted = fixture.trusted_time(1_120);
+    verify_authenticated_transport_exchange_evidence(
+        &evidence,
+        &fixture.policy,
+        &fixture.pin,
+        TransportExchangeExpectation {
+            purpose: TransportPurpose::RemoteCursor,
+            request_nonce: NONCE,
+            request_bytes: request,
+            response_bytes: response,
+        },
+        &trusted,
+    )
+    .unwrap();
+
+    for (changed_request, changed_response) in [
+        (&b"other-request"[..], &response[..]),
+        (&request[..], &b"other-response"[..]),
+    ] {
+        assert_eq!(
+            verify_authenticated_transport_exchange_evidence(
+                &evidence,
+                &fixture.policy,
+                &fixture.pin,
+                TransportExchangeExpectation {
+                    purpose: TransportPurpose::RemoteCursor,
+                    request_nonce: NONCE,
+                    request_bytes: changed_request,
+                    response_bytes: changed_response,
+                },
                 &trusted,
             )
             .unwrap_err(),

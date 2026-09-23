@@ -135,6 +135,10 @@ identity, prove finality, activate a network, or authorize asset movement.
   evidence for one exact TLS 1.3/mTLS exchange, including endpoint, handshake
   pins, nonce and request/response digests. It verifies claims but does not
   open or inspect a live TLS connection.
+- `bloch-authenticated-transport-session`: one-shot, bounded acquisition with
+  an in-memory CSPRNG nonce, exact request/response byte binding, monotonic
+  deadline and opaque verified response. The callback still must provide the
+  qualified live TLS adapter and truthful handshake evidence.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   fresh trusted time and an optional independently retained external anchor to
   the one-shot remote session and coordinated semantic admission, without
@@ -153,11 +157,16 @@ identity, prove finality, activate a network, or authorize asset movement.
   consumed.
 - `bloch-local-state-remote-cursor-receipt-staging`: crash-safe create-once
   signing material and signed-receipt import for exact CAS decisions. Private
-  keys and external signer operation remain outside the process.
+  keys and external signer operation remain outside the process. Its offline
+  CLI exports owner-only signing requests; manual-time import is explicitly a
+  non-production ceremony path.
 - `bloch-local-state-remote-cursor-replica-quorum`: offline comparison of
   independently authenticated replica observations, with absolute trusted-time
   freshness and split-brain rejection. It is evidence analysis, not consensus,
   fencing or a replicated service.
+- `bloch-local-state-remote-cursor-quorum-session`: bounded fresh collection
+  from every configured replica with a distinct CSPRNG nonce, per-replica and
+  global deadlines, exact signer-set binding and no raw/partial fallback.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.
