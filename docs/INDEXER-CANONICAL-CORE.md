@@ -131,6 +131,30 @@ policy. Verification binds checkpoint domain, stable ledger ID, audit-policy
 digest, count and head, and can require ancestry from a previously verified
 checkpoint. It still does not make the local ledger WORM or replicated.
 
+The audit replica verifier fully replays 2–32 ledgers, rejects duplicate local
+directories, compares every shared history prefix, detects divergence and
+requires an exact current-state quorum. An optional previously verified signed
+checkpoint detects rollback relative to that checkpoint. It verifies retained
+bytes and identities; it cannot prove that storage is physically independent,
+WORM, remotely available or controlled by separate operators.
+
+`bloch-indexer-service-admission` binds the complete chain identity and anchor,
+five exact policies, storage paths and stable IDs, and distinct reviewed
+evidence digests for TLS, external signing, replica/WORM retention, HA and data
+governance enforcement. Admission is computed from ten checks and fails closed
+when any capability is unavailable. A digest proves only that the exact
+reviewed evidence bytes were supplied; it does not prove their truth, freshness
+or operational state. The admission contract performs no network, filesystem or
+deployment probe.
+
+`bloch-data-governance` is a separate regulated-data policy boundary. It binds
+institution, tenant, dataset/schema, purpose, jurisdictions, processing/storage
+regions, workload, recipients, retention/legal hold and field placement. It
+keeps values off-chain and restricts v1 publication to a policy-approved hiding
+commitment envelope. The caller must supply runtime facts from authenticated
+sources and an externally qualified commitment construction; the crate cannot
+infer legal compliance or prove cryptographic privacy.
+
 Snapshot schema v4 stores canonical state, compacted/pending outbox, delivery
 cursor and authenticated acknowledgement evidence together. It intentionally
 does not load older snapshots; no
@@ -162,6 +186,8 @@ cargo test --locked --offline -p bloch-indexer-receiver-core
 cargo test --locked --offline -p bloch-indexer-receipt-ack
 cargo test --locked --offline -p bloch-indexer-audit
 cargo test --locked --offline -p bloch-indexer-audit-retention
+cargo test --locked --offline -p bloch-data-governance
+cargo test --locked --offline -p bloch-indexer-service-admission
 ```
 
 The next indexer slices are authenticated caller-operated network adapters

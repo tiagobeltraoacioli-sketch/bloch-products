@@ -19,6 +19,7 @@ use std::path::Path;
 use thiserror::Error;
 
 mod checkpoint;
+mod replica;
 
 pub use checkpoint::{
     MAX_RETENTION_CHECKPOINT_BYTES, MAX_RETENTION_CHECKPOINT_POLICY_BYTES,
@@ -28,6 +29,11 @@ pub use checkpoint::{
     parse_retention_checkpoint_policy, retention_checkpoint_policy_sha256,
     retention_checkpoint_signature_message, verify_retention_checkpoint,
     verify_retention_checkpoint_against_ledger,
+};
+pub use replica::{
+    MAX_AUDIT_REPLICAS, MAX_REPLICA_MANIFEST_BYTES, ReplicaManifest, ReplicaManifestEntry,
+    ReplicaSetError, ReplicaSetReport, ReplicaStatus, ReplicaVerificationInput, VerifiedReplica,
+    parse_replica_manifest, verify_audit_replicas,
 };
 
 pub const RETENTION_ENTRY_SCHEMA: &str = "bloch.data.outbox-audit-retention-entry.v1";

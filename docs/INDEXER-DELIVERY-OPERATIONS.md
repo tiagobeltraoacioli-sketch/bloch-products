@@ -29,13 +29,17 @@ The operator must provision sender, receiver, audit and retention-checkpoint
 policy digests through independent configuration paths. Signing occurs outside
 these crates. Low-level core ACK functions do not authenticate receipts and
 must not be exposed by a deployment that requires receiver-authenticated ACKs.
+The create-once request/import workflow, including the operational durable
+receiver path, is documented in
+[`INDEXER-SIGNING-CEREMONY.md`](INDEXER-SIGNING-CEREMONY.md).
 
 Still open for production:
 
 - authenticated TLS/mTLS or equivalent network adapters;
 - HSM/KMS-backed external signing and key rotation ceremonies;
 - monitoring, quotas, backup and disaster-recovery procedures;
-- replicated or WORM audit retention;
+- independently operated replicas and actual WORM audit retention (the
+  implemented verifier compares retained ledgers but cannot create either);
 - distributed database coordination and HA failover;
 - independently established L2 consensus finality.
 

@@ -23,10 +23,14 @@ will follow working implementations and retained evidence.
    authorize a durable ACK with their evidence retained atomically in snapshot
    v4. Strict offline delivery transport codecs and local hash-chained signed
    audit retention are implemented. A crash-recoverable sender spool, durable
-   idempotent receiver core and externally signed retention checkpoints are also
-   implemented; authenticated network adapters, external signer/HSM operation,
-   independently replicated/WORM retention and distributed database/HA
-   operation remain open.
+   idempotent receiver core, offline external-signing ceremonies, externally
+   signed retention checkpoints, multi-replica ledger comparison and canonical
+   fail-closed service admission are also implemented. A canonical regulated-data
+   policy now denies cross-tenant/purpose/region/retention violations and permits
+   only bounded hiding commitments at the on-chain boundary. Authenticated
+   network adapters, tenant-isolated encrypted storage, actual KMS/HSM and
+   commitment implementations, privacy lifecycle execution, independently
+   operated WORM replicas and distributed database/HA operation remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.

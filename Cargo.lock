@@ -9,6 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bloch-data-governance"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-indexer-audit"
 version = "0.1.0"
 dependencies = [
@@ -158,15 +169,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-indexer-service-admission"
+version = "0.1.0"
+dependencies = [
+ "bloch-data-governance",
+ "bloch-indexer-audit",
+ "bloch-indexer-audit-retention",
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "bloch-indexer-input",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-verify"
 version = "0.1.0"
 dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "bloch-indexer-delivery-transport",
+ "bloch-indexer-receiver-core",
  "bloch-verify-core",
  "ed25519-dalek",
  "hex",
  "libc",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

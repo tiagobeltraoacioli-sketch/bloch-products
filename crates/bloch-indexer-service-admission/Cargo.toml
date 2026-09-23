@@ -1,0 +1,21 @@
+[package]
+name = "bloch-indexer-service-admission"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-data-governance = { path = "../bloch-data-governance" }
+bloch-indexer-audit = { path = "../bloch-indexer-audit" }
+bloch-indexer-audit-retention = { path = "../bloch-indexer-audit-retention" }
+bloch-indexer-core = { path = "../bloch-indexer-core" }
+bloch-indexer-delivery-protocol = { path = "../bloch-indexer-delivery-protocol" }
+bloch-indexer-input = { path = "../bloch-indexer-input" }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

@@ -5,11 +5,12 @@ use bloch_indexer_audit::{
     detached_signature_message, export_audit_artifact, verify_audit_artifact,
 };
 use bloch_indexer_audit_retention::{
-    RetentionCheckpointError, RetentionCheckpointPolicy, RetentionCheckpointSigner, RetentionError,
-    RetentionExpectation, append_audit_entry, canonical_retention_checkpoint_policy_bytes,
-    export_retention_checkpoint, retention_checkpoint_policy_sha256,
+    ReplicaSetError, ReplicaStatus, ReplicaVerificationInput, RetentionCheckpointError,
+    RetentionCheckpointPolicy, RetentionCheckpointSigner, RetentionError, RetentionExpectation,
+    append_audit_entry, canonical_retention_checkpoint_policy_bytes, export_retention_checkpoint,
+    parse_replica_manifest, retention_checkpoint_policy_sha256,
     retention_checkpoint_signature_message, verify_audit_ledger,
-    verify_audit_ledger_with_expectation, verify_retention_checkpoint,
+    verify_audit_ledger_with_expectation, verify_audit_replicas, verify_retention_checkpoint,
     verify_retention_checkpoint_against_ledger,
 };
 use bloch_indexer_core::{
@@ -618,6 +619,205 @@ fn previous_authenticated_boundary_detects_rollback_and_history_replacement() {
     cleanup(root);
 }
 
+#[test]
+fn replica_quorum_replays_matching_independent_directories() {
+    let fixture = Fixture::new(7);
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let first = populated_ledger(&fixture, 2);
+    let second = populated_ledger(&fixture, 2);
+    let replicas = vec![
+        replica_input("replica-a", &first, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-b", &second, &fixture, &checkpoint_key, &policy),
+    ];
+    let report = verify_audit_replicas(
+        &replicas,
+        2,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        &policy_bytes,
+        &policy_sha256,
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.agreeing_current_replicas, 2);
+    assert_eq!(report.current_count, 2);
+    assert!(
+        report
+            .replicas
+            .iter()
+            .all(|replica| replica.status == ReplicaStatus::Current)
+    );
+    cleanup(first);
+    cleanup(second);
+}
+
+#[test]
+fn replica_quorum_marks_ancestral_replica_stale_and_bounds_quorum() {
+    let fixture = Fixture::new(7);
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let current_a = populated_ledger(&fixture, 2);
+    let current_b = populated_ledger(&fixture, 2);
+    let stale = populated_ledger(&fixture, 1);
+    let replicas = vec![
+        replica_input("replica-a", &current_a, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-b", &current_b, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-c", &stale, &fixture, &checkpoint_key, &policy),
+    ];
+    let report = verify_audit_replicas(
+        &replicas,
+        2,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        &policy_bytes,
+        &policy_sha256,
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.replicas[2].status, ReplicaStatus::Stale);
+    assert!(matches!(
+        verify_audit_replicas(
+            &replicas,
+            3,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &policy_bytes,
+            &policy_sha256,
+            None,
+        ),
+        Err(ReplicaSetError::QuorumNotMet {
+            required: 3,
+            observed: 2
+        })
+    ));
+    for path in [current_a, current_b, stale] {
+        cleanup(path);
+    }
+}
+
+#[test]
+fn replica_comparison_detects_split_brain_and_duplicate_storage() {
+    let fixture = Fixture::new(7);
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let first = populated_ledger_with_tips(&fixture, &['2']);
+    let fork = populated_ledger_with_tips(&fixture, &['5']);
+    let replicas = vec![
+        replica_input("replica-a", &first, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-b", &fork, &fixture, &checkpoint_key, &policy),
+    ];
+    assert!(matches!(
+        verify_audit_replicas(
+            &replicas,
+            2,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &policy_bytes,
+            &policy_sha256,
+            None,
+        ),
+        Err(ReplicaSetError::SplitBrain { sequence: 1, .. })
+    ));
+    let duplicate = vec![
+        replica_input("replica-a", &first, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-b", &first, &fixture, &checkpoint_key, &policy),
+    ];
+    assert!(matches!(
+        verify_audit_replicas(
+            &duplicate,
+            2,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &policy_bytes,
+            &policy_sha256,
+            None,
+        ),
+        Err(ReplicaSetError::DuplicateLedger { .. })
+    ));
+    cleanup(first);
+    cleanup(fork);
+}
+
+#[test]
+fn replica_comparison_detects_authenticated_rollback_and_policy_substitution() {
+    let fixture = Fixture::new(7);
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let full = populated_ledger(&fixture, 2);
+    let prior_input = replica_input("replica-a", &full, &fixture, &checkpoint_key, &policy);
+    let prior = verify_retention_checkpoint(
+        &prior_input.checkpoint_bytes,
+        &prior_input.signer_id,
+        &prior_input.signature_bytes,
+        &policy_bytes,
+        &policy_sha256,
+    )
+    .unwrap();
+    let stale_a = populated_ledger(&fixture, 1);
+    let stale_b = populated_ledger(&fixture, 1);
+    let stale = vec![
+        replica_input("replica-a", &stale_a, &fixture, &checkpoint_key, &policy),
+        replica_input("replica-b", &stale_b, &fixture, &checkpoint_key, &policy),
+    ];
+    assert!(matches!(
+        verify_audit_replicas(
+            &stale,
+            2,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &policy_bytes,
+            &policy_sha256,
+            Some(&prior),
+        ),
+        Err(ReplicaSetError::Rollback(_))
+    ));
+    assert!(matches!(
+        verify_audit_replicas(
+            &stale,
+            2,
+            &fixture.policy_bytes,
+            &hash('9'),
+            &policy_bytes,
+            &policy_sha256,
+            None,
+        ),
+        Err(ReplicaSetError::Substitution(_))
+    ));
+    for path in [full, stale_a, stale_b] {
+        cleanup(path);
+    }
+}
+
+#[test]
+fn replica_manifest_is_strict_and_bounded() {
+    let valid = br#"{"requiredQuorum":2,"replicas":[{"replicaId":"replica-a","ledgerPath":"/a","checkpointPath":"/c1","signerId":"signer-1","signaturePath":"/s1"},{"replicaId":"replica-b","ledgerPath":"/b","checkpointPath":"/c2","signerId":"signer-1","signaturePath":"/s2"}]}"#;
+    assert!(parse_replica_manifest(valid).is_ok());
+    let duplicate = br#"{"requiredQuorum":2,"requiredQuorum":2,"replicas":[]}"#;
+    assert!(matches!(
+        parse_replica_manifest(duplicate),
+        Err(ReplicaSetError::InvalidManifest(_))
+    ));
+    let unknown = br#"{"requiredQuorum":2,"unexpected":true,"replicas":[]}"#;
+    assert!(matches!(
+        parse_replica_manifest(unknown),
+        Err(ReplicaSetError::InvalidManifest(_))
+    ));
+    let one = br#"{"requiredQuorum":1,"replicas":[{"replicaId":"replica-a","ledgerPath":"/a","checkpointPath":"/c","signerId":"s","signaturePath":"/s"}]}"#;
+    assert!(matches!(
+        parse_replica_manifest(one),
+        Err(ReplicaSetError::InvalidConfiguration(_))
+    ));
+}
+
 fn checkpoint_policy(key: &SigningKey) -> RetentionCheckpointPolicy {
     RetentionCheckpointPolicy {
         checkpoint_domain: "bloch-prod-retention-checkpoint-1".into(),
@@ -639,6 +839,51 @@ fn signed_retention_checkpoint(
     let message =
         retention_checkpoint_signature_message(&bytes, "checkpoint-auditor-1", policy).unwrap();
     (bytes, key.sign(&message).to_bytes())
+}
+
+fn replica_input(
+    replica_id: &str,
+    ledger: &Path,
+    fixture: &Fixture,
+    checkpoint_key: &SigningKey,
+    policy: &RetentionCheckpointPolicy,
+) -> ReplicaVerificationInput {
+    let entries =
+        verify_audit_ledger(ledger, &fixture.policy_bytes, &fixture.policy_sha256).unwrap();
+    let boundary = RetentionExpectation {
+        entry_count: entries.len() as u64,
+        head_sha256: entries
+            .last()
+            .map(|entry| entry.entry_sha256.clone())
+            .unwrap_or_else(|| hash('0')),
+    };
+    let (checkpoint_bytes, signature) =
+        signed_retention_checkpoint(checkpoint_key, policy, &fixture.policy_sha256, boundary);
+    ReplicaVerificationInput {
+        replica_id: replica_id.into(),
+        ledger: ledger.to_owned(),
+        checkpoint_bytes,
+        signer_id: "checkpoint-auditor-1".into(),
+        signature_bytes: signature.to_vec(),
+    }
+}
+
+fn populated_ledger_with_tips(fixture: &Fixture, tips: &[char]) -> PathBuf {
+    let root = private_temp_directory();
+    for tip in tips {
+        let (artifact, signature) = fixture.signed_artifact(*tip);
+        append_audit_entry(
+            &root,
+            &artifact,
+            None,
+            "auditor-1",
+            &signature,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+        )
+        .unwrap();
+    }
+    root
 }
 
 fn populated_ledger(fixture: &Fixture, count: usize) -> PathBuf {

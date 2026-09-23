@@ -49,6 +49,20 @@ identity, prove finality, activate a network, or authorize asset movement.
   expectations for truncation detection.
 - Signed, path-independent retention checkpoints bind ledger identity, audit
   policy, entry count and head to a separately pinned checkpoint policy.
+- Multi-replica audit verification replays complete ledgers, compares every
+  shared prefix and requires an exact current-state quorum without claiming
+  physical or operator independence.
+- `bloch-indexer-service-admission`: canonical fail-closed admission binds the
+  chain anchor, five pinned policies, durable storage identities and distinct
+  evidence for TLS, external signing, replica/WORM retention, HA and governance
+  enforcement.
+- `bloch-data-governance`: canonical, independently pinned institution/tenant,
+  purpose, field-classification, jurisdiction, region, retention and release
+  policy. Protected values remain off-chain; v1 can authorize only a bounded
+  externally constructed hiding commitment for publication.
+- `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
+  signing requests, with operational receipt import routed through the durable
+  receiver core. Private keys remain external.
 - Unix snapshot mutations use a bounded local single-writer lock, reload the
   latest durable state while locked and reject unsafe lock files. Snapshot
   initialization is create-once and cannot overwrite existing state.
@@ -112,6 +126,16 @@ than a production service.
 
 The complete offline delivery lifecycle and crash boundaries are documented in
 [`docs/INDEXER-DELIVERY-OPERATIONS.md`](docs/INDEXER-DELIVERY-OPERATIONS.md).
+Exact external-signing commands and recovery boundaries are in
+[`docs/INDEXER-SIGNING-CEREMONY.md`](docs/INDEXER-SIGNING-CEREMONY.md).
+The service admission contract and its deliberately limited evidence semantics
+are documented in
+[`docs/INDEXER-SERVICE-ADMISSION.md`](docs/INDEXER-SERVICE-ADMISSION.md).
+The regulated-data boundary, hybrid local/off-chain design and threat model are
+documented in
+[`docs/BLOCH-DATA-REGULATED-DATA.md`](docs/BLOCH-DATA-REGULATED-DATA.md),
+[`docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md`](docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md)
+and [`docs/BLOCH-DATA-THREAT-MODEL.md`](docs/BLOCH-DATA-THREAT-MODEL.md).
 
 ## Product boundaries
 
