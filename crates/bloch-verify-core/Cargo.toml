@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bloch-trusted-time = { path = "../bloch-trusted-time" }
 ed25519-dalek.workspace = true
 hex.workspace = true
 serde.workspace = true

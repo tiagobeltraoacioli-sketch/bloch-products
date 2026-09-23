@@ -5,7 +5,8 @@
 //! implemented verifier may produce a passing outcome.
 
 use crate::{
-    AssessmentReport, NetworkIdentity, VerifyError, network_identity_sha256,
+    AssessmentReport, NetworkIdentity, VerifyError,
+    checkpoint_ancestry::VerifiedCheckpointAncestry, network_identity_sha256,
     organization_independence::VerifiedOrganizationIndependence, validate_network_identity,
 };
 use serde::{Deserialize, Serialize};
@@ -136,11 +137,11 @@ pub fn bloch_l2_700771_policy(
             },
             QualificationGateDefinition {
                 gate_id: QualificationGateId::CheckpointAncestry,
-                evidence_schema: "bloch.verify.checkpoint-ancestry-proof.v1".into(),
-                verifier_id: "bloch-verify-checkpoint-ancestry.unavailable".into(),
-                verifier_status: VerifierStatus::NotImplemented,
+                evidence_schema: "bloch.verify.authenticated-checkpoint-ancestry.v1".into(),
+                verifier_id: "bloch-verify-core.checkpoint-ancestry.v1".into(),
+                verifier_status: VerifierStatus::Implemented,
                 requirements: vec![
-                    "the proof begins at an independently pinned genesis or trusted anchor".into(),
+                    "the proof terminates at an independently pinned trusted anchor".into(),
                     "every parent link through the assessed checkpoint is authenticated".into(),
                     "height, block hash and state root are bound to the proof".into(),
                 ],
@@ -171,7 +172,32 @@ pub fn evaluate_current_production_gates(
     assessed_network: &NetworkIdentity,
     expected_network: &NetworkIdentity,
 ) -> Result<ProductionQualificationReport, VerifyError> {
-    evaluate_production_gates(assessment, assessed_network, expected_network, None)
+    evaluate_production_gates(
+        assessment,
+        assessed_network,
+        expected_network,
+        ProductionGateCapabilities::default(),
+    )
+}
+
+/// Optional opaque capabilities accepted by the production evaluator.
+///
+/// Each tuple contains the independently retained policy pin followed by the
+/// verified capability. Omitting a capability fails its gate; it never turns
+/// into a passing caller claim.
+#[derive(Default)]
+pub struct ProductionGateCapabilities<'a> {
+    pub organization_independence: Option<(&'a str, &'a VerifiedOrganizationIndependence)>,
+    pub checkpoint_ancestry: Option<(&'a str, &'a VerifiedCheckpointAncestry)>,
+}
+
+pub fn evaluate_production_gates_with_capabilities(
+    assessment: &AssessmentReport,
+    assessed_network: &NetworkIdentity,
+    expected_network: &NetworkIdentity,
+    capabilities: ProductionGateCapabilities<'_>,
+) -> Result<ProductionQualificationReport, VerifyError> {
+    evaluate_production_gates(assessment, assessed_network, expected_network, capabilities)
 }
 
 /// Evaluates production gates with a separately pinned, verified
@@ -194,7 +220,10 @@ pub fn evaluate_production_gates_with_organization_independence(
         assessment,
         assessed_network,
         expected_network,
-        Some(independence),
+        ProductionGateCapabilities {
+            organization_independence: Some((expected_independence_policy_sha256, independence)),
+            checkpoint_ancestry: None,
+        },
     )
 }
 
@@ -202,7 +231,7 @@ fn evaluate_production_gates(
     assessment: &AssessmentReport,
     assessed_network: &NetworkIdentity,
     expected_network: &NetworkIdentity,
-    independence: Option<&VerifiedOrganizationIndependence>,
+    capabilities: ProductionGateCapabilities<'_>,
 ) -> Result<ProductionQualificationReport, VerifyError> {
     validate_network_identity(assessed_network, "assessedNetwork")?;
     let policy = bloch_l2_700771_policy(expected_network)?;
@@ -248,9 +277,10 @@ fn evaluate_production_gates(
                             )
                         }
                     }
-                    QualificationGateId::OrganizationIndependence => match independence {
-                        Some(evidence)
-                            if evidence.ensure_monotonic_freshness().is_ok()
+                    QualificationGateId::OrganizationIndependence => match capabilities.organization_independence {
+                        Some((expected_pin, evidence))
+                            if evidence.policy_sha256() == expected_pin
+                                && evidence.ensure_monotonic_freshness().is_ok()
                                 && evidence.assessed_bundle_sha256()
                                     == assessment.bundle_sha256
                                 && evidence.expected_network_sha256()
@@ -274,11 +304,30 @@ fn evaluate_production_gates(
                             "verified organizational-independence evidence and its independently retained policy pin were not supplied".into(),
                         ),
                     },
-                    QualificationGateId::CheckpointAncestry => (
-                        GateDisposition::VerifierUnavailable,
-                        false,
-                        "no implemented verifier authenticates checkpoint ancestry".into(),
-                    ),
+                    QualificationGateId::CheckpointAncestry => match capabilities.checkpoint_ancestry {
+                        Some((expected_pin, evidence))
+                            if evidence.policy_sha256() == expected_pin
+                                && evidence.ensure_monotonic_freshness().is_ok()
+                                && evidence.assessed_bundle_sha256() == assessment.bundle_sha256
+                                && evidence.expected_network_sha256() == expected_network_sha256 =>
+                        {
+                            (
+                                GateDisposition::Passed,
+                                true,
+                                "threshold-authenticated parent linkage matches the exact assessed bundle, checkpoint, trust anchor and reviewed network; consensus finality remains a separate gate".into(),
+                            )
+                        }
+                        Some(_) => (
+                            GateDisposition::Failed,
+                            false,
+                            "checkpoint-ancestry evidence is stale or crosses its independently pinned policy, assessed bundle or reviewed network".into(),
+                        ),
+                        None => (
+                            GateDisposition::Failed,
+                            false,
+                            "verified checkpoint-ancestry evidence and its independently retained policy pin were not supplied".into(),
+                        ),
+                    },
                     QualificationGateId::ConsensusFinality => (
                         GateDisposition::VerifierUnavailable,
                         false,
@@ -352,7 +401,7 @@ mod tests {
                 .iter()
                 .filter(|gate| gate.verifier_status == VerifierStatus::NotImplemented)
                 .count(),
-            2
+            1
         );
         let encoded = serde_json::to_vec(&policy).unwrap();
         let decoded: ProductionQualificationPolicy = serde_json::from_slice(&encoded).unwrap();
@@ -444,9 +493,13 @@ mod tests {
         assert!(qualification.gates[1].passed);
         assert!(!qualification.gates[2].passed);
         assert_eq!(qualification.gates[2].disposition, GateDisposition::Failed);
-        assert!(qualification.gates[3..].iter().all(|gate| {
-            !gate.passed && gate.disposition == GateDisposition::VerifierUnavailable
-        }));
+        assert!(!qualification.gates[3].passed);
+        assert_eq!(qualification.gates[3].disposition, GateDisposition::Failed);
+        assert!(!qualification.gates[4].passed);
+        assert_eq!(
+            qualification.gates[4].disposition,
+            GateDisposition::VerifierUnavailable
+        );
         assert!(!qualification.production_qualified);
         assert_eq!(qualification.reasons.len(), 3);
     }

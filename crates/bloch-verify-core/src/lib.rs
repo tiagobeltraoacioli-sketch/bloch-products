@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
+pub mod checkpoint_ancestry;
 pub mod organization_independence;
 pub mod qualification;
 

@@ -4,6 +4,7 @@ members = [
   "crates/bloch-authenticated-fetch-adapter",
   "crates/bloch-authenticated-transport-session",
   "crates/bloch-data-governance",
+  "crates/bloch-evm-consensus-finality",
   "crates/bloch-indexer-audit",
   "crates/bloch-indexer-audit-retention",
   "crates/bloch-indexer-core",

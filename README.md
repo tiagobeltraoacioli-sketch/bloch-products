@@ -17,6 +17,13 @@ identity, prove finality, activate a network, or authorize asset movement.
   bundle and reviewed network to a separately pinned reviewer policy, with
   structural separation of legal, administrative, infrastructure and signing
   controls. External legal facts still require independent validation.
+- Threshold-authenticated checkpoint ancestry binds one exact EVM parent chain
+  to the assessed bundle, reviewed network, checkpoint, pinned terminal anchor
+  and authenticated trusted time. It cannot satisfy consensus finality.
+- `bloch-evm-consensus-finality`: verifies a fresh weighted Ed25519 quorum over
+  one exact checkpoint under an independently pinned generation-1 validator
+  set. This is a certificate primitive, not proof that a deployed L2 executes
+  the corresponding consensus protocol or validator-set transitions.
 - Create-once detached-signature requests and signed-bundle assembly.
 - Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.

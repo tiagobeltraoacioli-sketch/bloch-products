@@ -24,3 +24,16 @@ linked. It does not authenticate the source of those headers, establish a path
 from a reviewed trust anchor, verify a validator set or prove protocol
 finality. Consequently `consensusFinalityAuthenticated` and
 `productionQualified` remain false.
+
+`bloch-verify-core::checkpoint_ancestry` can additionally authenticate this
+same bounded parent chain. Its separately pinned canonical policy fixes the
+reviewed network, the later terminal anchor, trusted-time audience and a
+threshold of distinct Ed25519 authority organizations/control domains. The
+signed envelope fixes the exact bundle, checkpoint and ancestry-evidence
+digest. Verification requires a matching `VerifiedTrustedTime`; freshness is
+then retained with a monotonic deadline.
+
+That capability is suitable only for the `CheckpointAncestry` qualification
+gate. It deliberately reports `consensus_finality_authenticated() == false`:
+authority signatures attest exact parent linkage and do not substitute for a
+protocol validator-set/finality proof.

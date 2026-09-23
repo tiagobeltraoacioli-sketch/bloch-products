@@ -61,6 +61,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-evm-consensus-finality"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-indexer-audit"
 version = "0.1.0"
 dependencies = [
@@ -702,6 +715,7 @@ dependencies = [
 name = "bloch-verify-core"
 version = "0.1.0"
 dependencies = [
+ "bloch-trusted-time",
  "ed25519-dalek",
  "hex",
  "serde",
