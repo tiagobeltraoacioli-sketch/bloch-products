@@ -8,3 +8,6 @@ publish.workspace = true
 bloch-verify-core = { path = "../bloch-verify-core" }
 serde_json.workspace = true
 
+[dev-dependencies]
+ed25519-dalek.workspace = true
+hex.workspace = true

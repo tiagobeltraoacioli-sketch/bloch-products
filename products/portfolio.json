@@ -7,7 +7,7 @@
       "id": "bloch-verify",
       "priority": "P0",
       "status": "mvp-implemented",
-      "capabilities": ["operator-package", "checkpoint-comparison", "state-evidence-report"],
+      "capabilities": ["operator-package", "checkpoint-comparison", "signed-observations", "pinned-operator-policy", "state-evidence-report"],
       "gates": ["regular-checkpoint-publication", "independent-nodes", "stable-api"]
     },
     {
@@ -55,4 +55,3 @@
   ],
   "research": ["cryptographic-agility", "verifiable-privacy", "pq-credentials"]
 }
-

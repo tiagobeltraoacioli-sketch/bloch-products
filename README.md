@@ -11,6 +11,8 @@ identity, prove finality, activate a network, or authorize asset movement.
 ## Implemented now
 
 - `bloch-verify-core`: strict evidence schema, canonical digest and assessment.
+- External operator trust policies pinned by an independently retained SHA-256.
+- Domain-separated Ed25519 verification for exact node observations.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
@@ -31,8 +33,12 @@ cargo run --locked -p bloch-verify -- \
   --require-comparison
 ```
 
+Signed bundles use `assess-signed`, an external policy file and
+`--expected-trust-policy-sha256`. `--require-authenticated-comparison` requires
+every observation to match a pinned operator key and valid Ed25519 signature.
+
 `--require-production-qualified` intentionally exits nonzero in this version.
-Signed observations, independently retained trust roots and authenticated
+Real-world organizational independence and authenticated consensus
 finality/ancestry are not implemented yet.
 
 ## Product boundaries
@@ -42,4 +48,3 @@ broadcast, bridge execution, DEX liquidity, payment credit, Pix integration,
 asset issuance, DvP/PvP settlement or regulatory connectivity.
 
 No license is granted yet. Copyright © Bloch Inc.
-

@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -6,6 +7,9 @@ use thiserror::Error;
 const MAX_BUNDLE_BYTES: usize = 1_048_576;
 const MAX_OBSERVATIONS: usize = 64;
 const SCHEMA: &str = "bloch.verify.checkpoint-bundle.v1";
+const SIGNED_SCHEMA: &str = "bloch.verify.signed-checkpoint-bundle.v1";
+const TRUST_POLICY_SCHEMA: &str = "bloch.verify.operator-trust-policy.v1";
+const OBSERVATION_SIGNATURE_DOMAIN: &str = "bloch.verify.node-observation.v1";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VerifyError {
@@ -15,6 +19,12 @@ pub enum VerifyError {
     InvalidJson(String),
     #[error("invalid evidence field: {0}")]
     InvalidField(&'static str),
+    #[error("trust policy digest mismatch")]
+    TrustPolicyDigestMismatch,
+    #[error("untrusted or duplicated observer: {0}")]
+    UntrustedObserver(String),
+    #[error("invalid observation signature: {0}")]
+    InvalidSignature(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +80,42 @@ pub struct NodeObservation {
     pub release_revision: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OperatorTrustPolicy {
+    pub schema: String,
+    pub policy_id: String,
+    pub valid_from_unix_seconds: u64,
+    pub valid_until_unix_seconds: u64,
+    pub comparison: ComparisonPolicy,
+    pub operators: Vec<TrustedOperator>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TrustedOperator {
+    pub observer_id: String,
+    pub organization_id: String,
+    pub ed25519_public_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SignedEvidenceBundle {
+    pub schema: String,
+    pub network: NetworkIdentity,
+    pub checkpoint: Checkpoint,
+    pub trust_policy_sha256: String,
+    pub signed_observations: Vec<SignedNodeObservation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SignedNodeObservation {
+    pub observation: NodeObservation,
+    pub signature: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssessmentReport {
@@ -80,6 +126,7 @@ pub struct AssessmentReport {
     pub distinct_organization_count: usize,
     pub checks: Checks,
     pub comparison_passed: bool,
+    pub authenticated_comparison_passed: bool,
     pub authentication: AuthenticationBoundary,
     pub production_qualified: bool,
     pub reasons: Vec<String>,
@@ -100,19 +147,65 @@ pub struct Checks {
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticationBoundary {
     pub observations_signed: bool,
-    pub organizations_authenticated: bool,
+    pub trust_policy_digest_matched: bool,
+    pub operator_keys_pinned: bool,
+    pub organizations_externally_verified: bool,
     pub checkpoint_ancestry_verified: bool,
     pub finality_authenticated: bool,
 }
 
 pub fn parse_bundle(bytes: &[u8]) -> Result<EvidenceBundle, VerifyError> {
-    if bytes.is_empty() || bytes.len() > MAX_BUNDLE_BYTES {
-        return Err(VerifyError::UnsafeSize);
-    }
+    safe_size(bytes)?;
     let bundle: EvidenceBundle = serde_json::from_slice(bytes)
         .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
     validate_shape(&bundle)?;
     Ok(bundle)
+}
+
+pub fn parse_signed_bundle(bytes: &[u8]) -> Result<SignedEvidenceBundle, VerifyError> {
+    safe_size(bytes)?;
+    let bundle: SignedEvidenceBundle = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_signed_shape(&bundle)?;
+    Ok(bundle)
+}
+
+pub fn parse_trust_policy(bytes: &[u8]) -> Result<OperatorTrustPolicy, VerifyError> {
+    safe_size(bytes)?;
+    let policy: OperatorTrustPolicy = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_trust_policy(&policy)?;
+    Ok(policy)
+}
+
+pub fn trust_policy_sha256(policy: &OperatorTrustPolicy) -> Result<String, VerifyError> {
+    validate_trust_policy(policy)?;
+    let mut canonical = policy.clone();
+    canonical
+        .operators
+        .sort_by(|left, right| left.observer_id.cmp(&right.observer_id));
+    canonical_digest(&canonical)
+}
+
+pub fn signed_observation_message(
+    trust_policy_sha256: &str,
+    observation: &NodeObservation,
+) -> Result<Vec<u8>, VerifyError> {
+    hash32(trust_policy_sha256, "trustPolicySha256")?;
+    validate_observation(observation)?;
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload<'a> {
+        domain: &'static str,
+        trust_policy_sha256: &'a str,
+        observation: &'a NodeObservation,
+    }
+    serde_json::to_vec(&Payload {
+        domain: OBSERVATION_SIGNATURE_DOMAIN,
+        trust_policy_sha256,
+        observation,
+    })
+    .map_err(|error| VerifyError::InvalidJson(error.to_string()))
 }
 
 pub fn assess(
@@ -205,15 +298,128 @@ pub fn assess(
         distinct_organization_count: organizations.len(),
         checks,
         comparison_passed,
+        authenticated_comparison_passed: false,
         authentication: AuthenticationBoundary {
             observations_signed: false,
-            organizations_authenticated: false,
+            trust_policy_digest_matched: false,
+            operator_keys_pinned: false,
+            organizations_externally_verified: false,
             checkpoint_ancestry_verified: false,
             finality_authenticated: false,
         },
         production_qualified: false,
         reasons,
     })
+}
+
+pub fn assess_signed(
+    bundle: &SignedEvidenceBundle,
+    policy: &OperatorTrustPolicy,
+    expected_trust_policy_sha256: &str,
+    evaluated_at_unix_seconds: u64,
+) -> Result<AssessmentReport, VerifyError> {
+    validate_signed_shape(bundle)?;
+    validate_trust_policy(policy)?;
+    hash32(expected_trust_policy_sha256, "expectedTrustPolicySha256")?;
+    let policy_sha256 = trust_policy_sha256(policy)?;
+    if policy_sha256 != expected_trust_policy_sha256
+        || bundle.trust_policy_sha256 != expected_trust_policy_sha256
+    {
+        return Err(VerifyError::TrustPolicyDigestMismatch);
+    }
+    if evaluated_at_unix_seconds < policy.valid_from_unix_seconds
+        || evaluated_at_unix_seconds > policy.valid_until_unix_seconds
+    {
+        return Err(VerifyError::InvalidField("trustPolicy.validity"));
+    }
+
+    let mut trusted = std::collections::BTreeMap::new();
+    for operator in &policy.operators {
+        trusted.insert(operator.observer_id.as_str(), operator);
+    }
+    let mut supplied = BTreeSet::new();
+    for signed in &bundle.signed_observations {
+        let observation = &signed.observation;
+        if !supplied.insert(observation.observer_id.as_str()) {
+            return Err(VerifyError::UntrustedObserver(
+                observation.observer_id.clone(),
+            ));
+        }
+        let operator = trusted
+            .get(observation.observer_id.as_str())
+            .ok_or_else(|| VerifyError::UntrustedObserver(observation.observer_id.clone()))?;
+        if operator.organization_id != observation.organization_id {
+            return Err(VerifyError::UntrustedObserver(
+                observation.observer_id.clone(),
+            ));
+        }
+        let key_bytes = decode_hex_array::<32>(
+            &operator.ed25519_public_key,
+            "trustPolicy.operator.ed25519PublicKey",
+        )?;
+        let signature_bytes =
+            decode_hex_array::<64>(&signed.signature, "signedObservation.signature")?;
+        let key = VerifyingKey::from_bytes(&key_bytes)
+            .map_err(|_| VerifyError::InvalidField("trustPolicy.operator.ed25519PublicKey"))?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        let message = signed_observation_message(&policy_sha256, observation)?;
+        key.verify(&message, &signature)
+            .map_err(|_| VerifyError::InvalidSignature(observation.observer_id.clone()))?;
+    }
+
+    let unsigned = EvidenceBundle {
+        schema: SCHEMA.into(),
+        network: bundle.network.clone(),
+        checkpoint: bundle.checkpoint.clone(),
+        policy: policy.comparison.clone(),
+        observations: bundle
+            .signed_observations
+            .iter()
+            .map(|signed| signed.observation.clone())
+            .collect(),
+    };
+    let mut report = assess(&unsigned, evaluated_at_unix_seconds)?;
+    let mut canonical = bundle.clone();
+    canonical.signed_observations.sort_by(|left, right| {
+        left.observation
+            .observer_id
+            .cmp(&right.observation.observer_id)
+    });
+    report.bundle_sha256 = canonical_digest(&canonical)?;
+    report.schema = "bloch.verify.signed-assessment.v1";
+    report.authenticated_comparison_passed = report.comparison_passed;
+    report.authentication = AuthenticationBoundary {
+        observations_signed: true,
+        trust_policy_digest_matched: true,
+        operator_keys_pinned: true,
+        organizations_externally_verified: false,
+        checkpoint_ancestry_verified: false,
+        finality_authenticated: false,
+    };
+    report.reasons.retain(|reason| {
+        reason != "MVP observations are unsigned and finality/ancestry is not authenticated"
+    });
+    report.reasons.push(
+        "operator organization claims still require independent external verification".into(),
+    );
+    report.reasons.push(
+        "checkpoint ancestry and consensus finality are not authenticated by signed observations"
+            .into(),
+    );
+    Ok(report)
+}
+
+fn safe_size(bytes: &[u8]) -> Result<(), VerifyError> {
+    if bytes.is_empty() || bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(VerifyError::UnsafeSize);
+    }
+    Ok(())
+}
+
+fn canonical_digest<T: Serialize>(value: &T) -> Result<String, VerifyError> {
+    let bytes =
+        serde_json::to_vec(value).map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
 }
 
 fn validate_shape(bundle: &EvidenceBundle) -> Result<(), VerifyError> {
@@ -235,41 +441,126 @@ fn validate_shape(bundle: &EvidenceBundle) -> Result<(), VerifyError> {
     if bundle.observations.is_empty() || bundle.observations.len() > MAX_OBSERVATIONS {
         return Err(VerifyError::InvalidField("observations"));
     }
-    if bundle.policy.minimum_observers == 0
-        || usize::from(bundle.policy.minimum_observers) > bundle.observations.len()
-        || bundle.policy.minimum_organizations == 0
-        || bundle.policy.minimum_organizations > bundle.policy.minimum_observers
-        || bundle.policy.maximum_observation_age_seconds == 0
-        || bundle.policy.maximum_observation_age_seconds > 86_400
-        || bundle.policy.maximum_future_skew_seconds > 300
+    validate_comparison_policy(&bundle.policy, bundle.observations.len())?;
+    for observation in &bundle.observations {
+        validate_observation(observation)?;
+    }
+    Ok(())
+}
+
+fn validate_signed_shape(bundle: &SignedEvidenceBundle) -> Result<(), VerifyError> {
+    if bundle.schema != SIGNED_SCHEMA {
+        return Err(VerifyError::InvalidField("schema"));
+    }
+    if !valid_identifier(&bundle.network.network) || bundle.network.chain_id == 0 {
+        return Err(VerifyError::InvalidField("network"));
+    }
+    hash32(&bundle.network.genesis_hash, "network.genesisHash")?;
+    if bundle.checkpoint.height == 0 {
+        return Err(VerifyError::InvalidField("checkpoint.height"));
+    }
+    hash32(&bundle.checkpoint.block_hash, "checkpoint.blockHash")?;
+    hash32(&bundle.checkpoint.state_root, "checkpoint.stateRoot")?;
+    hash32(&bundle.trust_policy_sha256, "trustPolicySha256")?;
+    if bundle.signed_observations.is_empty() || bundle.signed_observations.len() > MAX_OBSERVATIONS
+    {
+        return Err(VerifyError::InvalidField("signedObservations"));
+    }
+    for signed in &bundle.signed_observations {
+        validate_observation(&signed.observation)?;
+        if !is_lower_hex(&signed.signature, 64, true) {
+            return Err(VerifyError::InvalidField("signedObservation.signature"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_trust_policy(policy: &OperatorTrustPolicy) -> Result<(), VerifyError> {
+    if policy.schema != TRUST_POLICY_SCHEMA
+        || !valid_identifier(&policy.policy_id)
+        || policy.valid_from_unix_seconds == 0
+        || policy.valid_until_unix_seconds <= policy.valid_from_unix_seconds
+        || policy.operators.is_empty()
+        || policy.operators.len() > MAX_OBSERVATIONS
+    {
+        return Err(VerifyError::InvalidField("trustPolicy"));
+    }
+    validate_comparison_policy(&policy.comparison, policy.operators.len())?;
+    let mut observers = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    for operator in &policy.operators {
+        if !valid_identifier(&operator.observer_id)
+            || !valid_identifier(&operator.organization_id)
+            || !is_lower_hex(&operator.ed25519_public_key, 32, true)
+            || !observers.insert(operator.observer_id.as_str())
+            || !keys.insert(operator.ed25519_public_key.as_str())
+        {
+            return Err(VerifyError::InvalidField("trustPolicy.operator"));
+        }
+        let bytes = decode_hex_array::<32>(
+            &operator.ed25519_public_key,
+            "trustPolicy.operator.ed25519PublicKey",
+        )?;
+        VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| VerifyError::InvalidField("trustPolicy.operator.ed25519PublicKey"))?;
+    }
+    Ok(())
+}
+
+fn validate_comparison_policy(
+    policy: &ComparisonPolicy,
+    available_observers: usize,
+) -> Result<(), VerifyError> {
+    if policy.minimum_observers == 0
+        || usize::from(policy.minimum_observers) > available_observers
+        || policy.minimum_organizations == 0
+        || policy.minimum_organizations > policy.minimum_observers
+        || policy.maximum_observation_age_seconds == 0
+        || policy.maximum_observation_age_seconds > 86_400
+        || policy.maximum_future_skew_seconds > 300
     {
         return Err(VerifyError::InvalidField("policy"));
     }
-    for observation in &bundle.observations {
-        if !valid_identifier(&observation.observer_id)
-            || !valid_identifier(&observation.organization_id)
-            || !valid_identifier(&observation.network)
-            || observation.observed_at_unix_seconds == 0
-            || observation.chain_id == 0
-            || observation.checkpoint_height == 0
-            || observation.claimed_finalized_height == 0
-            || !valid_version(&observation.node_version)
-            || !is_lower_hex(&observation.release_revision, 20, false)
-        {
-            return Err(VerifyError::InvalidField("observation"));
-        }
-        hash32(&observation.endpoint_sha256, "observation.endpointSha256")?;
-        hash32(&observation.genesis_hash, "observation.genesisHash")?;
-        hash32(
-            &observation.checkpoint_block_hash,
-            "observation.checkpointBlockHash",
-        )?;
-        hash32(
-            &observation.checkpoint_state_root,
-            "observation.checkpointStateRoot",
-        )?;
-    }
     Ok(())
+}
+
+fn validate_observation(observation: &NodeObservation) -> Result<(), VerifyError> {
+    if !valid_identifier(&observation.observer_id)
+        || !valid_identifier(&observation.organization_id)
+        || !valid_identifier(&observation.network)
+        || observation.observed_at_unix_seconds == 0
+        || observation.chain_id == 0
+        || observation.checkpoint_height == 0
+        || observation.claimed_finalized_height == 0
+        || !valid_version(&observation.node_version)
+        || !is_lower_hex(&observation.release_revision, 20, false)
+    {
+        return Err(VerifyError::InvalidField("observation"));
+    }
+    hash32(&observation.endpoint_sha256, "observation.endpointSha256")?;
+    hash32(&observation.genesis_hash, "observation.genesisHash")?;
+    hash32(
+        &observation.checkpoint_block_hash,
+        "observation.checkpointBlockHash",
+    )?;
+    hash32(
+        &observation.checkpoint_state_root,
+        "observation.checkpointStateRoot",
+    )?;
+    Ok(())
+}
+
+fn decode_hex_array<const N: usize>(
+    value: &str,
+    field: &'static str,
+) -> Result<[u8; N], VerifyError> {
+    if !is_lower_hex(value, N, true) {
+        return Err(VerifyError::InvalidField(field));
+    }
+    let decoded = hex::decode(&value[2..]).map_err(|_| VerifyError::InvalidField(field))?;
+    decoded
+        .try_into()
+        .map_err(|_| VerifyError::InvalidField(field))
 }
 
 fn hash32(value: &str, field: &'static str) -> Result<(), VerifyError> {
@@ -312,8 +603,58 @@ fn valid_version(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
 
     const FIXTURE: &[u8] = include_bytes!("../../../fixtures/valid-checkpoint.json");
+
+    fn signed_fixture() -> (OperatorTrustPolicy, SignedEvidenceBundle, String) {
+        let unsigned = parse_bundle(FIXTURE).unwrap();
+        let keys = [
+            SigningKey::from_bytes(&[7; 32]),
+            SigningKey::from_bytes(&[9; 32]),
+        ];
+        let policy = OperatorTrustPolicy {
+            schema: TRUST_POLICY_SCHEMA.into(),
+            policy_id: "genesis-4-operators-2026-09".into(),
+            valid_from_unix_seconds: 1_790_000_000,
+            valid_until_unix_seconds: 1_790_200_000,
+            comparison: unsigned.policy.clone(),
+            operators: unsigned
+                .observations
+                .iter()
+                .zip(&keys)
+                .map(|(observation, key)| TrustedOperator {
+                    observer_id: observation.observer_id.clone(),
+                    organization_id: observation.organization_id.clone(),
+                    ed25519_public_key: format!(
+                        "0x{}",
+                        hex::encode(key.verifying_key().to_bytes())
+                    ),
+                })
+                .collect(),
+        };
+        let digest = trust_policy_sha256(&policy).unwrap();
+        let signed_observations = unsigned
+            .observations
+            .iter()
+            .zip(&keys)
+            .map(|(observation, key)| {
+                let message = signed_observation_message(&digest, observation).unwrap();
+                SignedNodeObservation {
+                    observation: observation.clone(),
+                    signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+                }
+            })
+            .collect();
+        let bundle = SignedEvidenceBundle {
+            schema: SIGNED_SCHEMA.into(),
+            network: unsigned.network,
+            checkpoint: unsigned.checkpoint,
+            trust_policy_sha256: digest.clone(),
+            signed_observations,
+        };
+        (policy, bundle, digest)
+    }
 
     #[test]
     fn matching_observations_pass_comparison_but_not_production_qualification() {
@@ -361,5 +702,48 @@ mod tests {
             parse_bundle(&serde_json::to_vec(&value).unwrap()),
             Err(VerifyError::InvalidJson(_))
         ));
+    }
+
+    #[test]
+    fn signed_observations_authenticate_comparison_but_not_finality() {
+        let (policy, bundle, digest) = signed_fixture();
+        let report = assess_signed(&bundle, &policy, &digest, 1_790_121_600).unwrap();
+        assert!(report.comparison_passed);
+        assert!(report.authenticated_comparison_passed);
+        assert!(report.authentication.observations_signed);
+        assert!(report.authentication.trust_policy_digest_matched);
+        assert!(report.authentication.operator_keys_pinned);
+        assert!(!report.authentication.organizations_externally_verified);
+        assert!(!report.authentication.finality_authenticated);
+        assert!(!report.production_qualified);
+    }
+
+    #[test]
+    fn signed_observation_tampering_is_refused() {
+        let (policy, mut bundle, digest) = signed_fixture();
+        bundle.signed_observations[0]
+            .observation
+            .claimed_finalized_height += 1;
+        assert!(matches!(
+            assess_signed(&bundle, &policy, &digest, 1_790_121_600),
+            Err(VerifyError::InvalidSignature(_))
+        ));
+    }
+
+    #[test]
+    fn caller_cannot_substitute_trust_policy_digest() {
+        let (policy, bundle, _) = signed_fixture();
+        let foreign = format!("0x{}", "f".repeat(64));
+        assert_eq!(
+            assess_signed(&bundle, &policy, &foreign, 1_790_121_600).unwrap_err(),
+            VerifyError::TrustPolicyDigestMismatch
+        );
+    }
+
+    #[test]
+    fn trust_policy_digest_is_independent_of_operator_order() {
+        let (mut policy, _, digest) = signed_fixture();
+        policy.operators.reverse();
+        assert_eq!(trust_policy_sha256(&policy).unwrap(), digest);
     }
 }
