@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 bloch-indexer-audit = { path = "../bloch-indexer-audit" }
+ed25519-dalek.workspace = true
 hex.workspace = true
 libc.workspace = true
 serde.workspace = true
@@ -15,4 +16,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 bloch-indexer-core = { path = "../bloch-indexer-core" }
-ed25519-dalek.workspace = true

@@ -5,8 +5,12 @@ use bloch_indexer_audit::{
     detached_signature_message, export_audit_artifact, verify_audit_artifact,
 };
 use bloch_indexer_audit_retention::{
-    RetentionError, RetentionExpectation, append_audit_entry, verify_audit_ledger,
-    verify_audit_ledger_with_expectation,
+    RetentionCheckpointError, RetentionCheckpointPolicy, RetentionCheckpointSigner, RetentionError,
+    RetentionExpectation, append_audit_entry, canonical_retention_checkpoint_policy_bytes,
+    export_retention_checkpoint, retention_checkpoint_policy_sha256,
+    retention_checkpoint_signature_message, verify_audit_ledger,
+    verify_audit_ledger_with_expectation, verify_retention_checkpoint,
+    verify_retention_checkpoint_against_ledger,
 };
 use bloch_indexer_core::{
     ChainIdentity,
@@ -321,6 +325,320 @@ fn rejects_unsafe_directories_and_entry_links_or_permissions() {
         Err(RetentionError::UnsafeLedger(_))
     ));
     cleanup(root);
+}
+
+#[test]
+fn signed_checkpoint_authenticates_a_path_independent_ledger_boundary() {
+    let fixture = Fixture::new(7);
+    let root = populated_ledger(&fixture, 2);
+    let entries =
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).unwrap();
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let (checkpoint, signature) = signed_retention_checkpoint(
+        &checkpoint_key,
+        &policy,
+        &fixture.policy_sha256,
+        RetentionExpectation {
+            entry_count: 2,
+            head_sha256: entries[1].entry_sha256.clone(),
+        },
+    );
+
+    let verified = verify_retention_checkpoint_against_ledger(
+        &root,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        &checkpoint,
+        "checkpoint-auditor-1",
+        &signature,
+        &policy_bytes,
+        &policy_sha256,
+        None,
+    )
+    .unwrap();
+    assert_eq!(verified.ledger_id(), "bloch-prod-retention-ledger-1");
+    assert_eq!(verified.entry_count(), 2);
+
+    let moved = root.with_extension("moved");
+    fs::rename(&root, &moved).unwrap();
+    verify_retention_checkpoint_against_ledger(
+        &moved,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        &checkpoint,
+        "checkpoint-auditor-1",
+        &signature,
+        &policy_bytes,
+        &policy_sha256,
+        None,
+    )
+    .unwrap();
+    cleanup(moved);
+}
+
+#[test]
+fn checkpoint_rejects_wrong_pin_domain_signer_and_noncanonical_bytes() {
+    let fixture = Fixture::new(7);
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let (checkpoint, signature) = signed_retention_checkpoint(
+        &checkpoint_key,
+        &policy,
+        &fixture.policy_sha256,
+        RetentionExpectation {
+            entry_count: 1,
+            head_sha256: hash('b'),
+        },
+    );
+    assert!(matches!(
+        verify_retention_checkpoint(
+            &checkpoint,
+            "checkpoint-auditor-1",
+            &signature,
+            &policy_bytes,
+            &hash('9'),
+        ),
+        Err(RetentionCheckpointError::PolicyDigestMismatch)
+    ));
+    assert!(matches!(
+        verify_retention_checkpoint(
+            &checkpoint,
+            "unknown",
+            &signature,
+            &policy_bytes,
+            &policy_sha256,
+        ),
+        Err(RetentionCheckpointError::UntrustedSigner)
+    ));
+    let mut bad_signature = signature;
+    bad_signature[0] ^= 1;
+    assert!(matches!(
+        verify_retention_checkpoint(
+            &checkpoint,
+            "checkpoint-auditor-1",
+            &bad_signature,
+            &policy_bytes,
+            &policy_sha256,
+        ),
+        Err(RetentionCheckpointError::InvalidSignature)
+    ));
+
+    let mut other_domain = policy.clone();
+    other_domain.checkpoint_domain = "bloch-prod-retention-checkpoint-2".into();
+    let other_bytes = canonical_retention_checkpoint_policy_bytes(&other_domain).unwrap();
+    let other_pin = retention_checkpoint_policy_sha256(&other_domain).unwrap();
+    assert!(
+        verify_retention_checkpoint(
+            &checkpoint,
+            "checkpoint-auditor-1",
+            &signature,
+            &other_bytes,
+            &other_pin,
+        )
+        .is_err()
+    );
+
+    let mut noncanonical = checkpoint;
+    noncanonical.push(b'\n');
+    assert!(matches!(
+        verify_retention_checkpoint(
+            &noncanonical,
+            "checkpoint-auditor-1",
+            &signature,
+            &policy_bytes,
+            &policy_sha256,
+        ),
+        Err(RetentionCheckpointError::NonCanonicalCheckpoint)
+    ));
+
+    let text = String::from_utf8(noncanonical[..noncanonical.len() - 1].to_vec()).unwrap();
+    let duplicate = text.replacen(
+        "\"ledgerId\":",
+        "\"ledgerId\":\"substitution\",\"ledgerId\":",
+        1,
+    );
+    assert!(matches!(
+        verify_retention_checkpoint(
+            duplicate.as_bytes(),
+            "checkpoint-auditor-1",
+            &signature,
+            &policy_bytes,
+            &policy_sha256,
+        ),
+        Err(RetentionCheckpointError::InvalidJson(_))
+    ));
+    let unknown = text.replacen('{', "{\"unexpected\":true,", 1);
+    assert!(matches!(
+        verify_retention_checkpoint(
+            unknown.as_bytes(),
+            "checkpoint-auditor-1",
+            &signature,
+            &policy_bytes,
+            &policy_sha256,
+        ),
+        Err(RetentionCheckpointError::InvalidJson(_))
+    ));
+}
+
+#[test]
+fn checkpoint_boundary_enforces_genesis_and_nonzero_populated_heads() {
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let audit_policy_sha256 = hash('a');
+    let genesis = RetentionExpectation {
+        entry_count: 0,
+        head_sha256: hash('0'),
+    };
+    assert!(export_retention_checkpoint(&genesis, &audit_policy_sha256, &policy).is_ok());
+    assert!(matches!(
+        export_retention_checkpoint(
+            &RetentionExpectation {
+                entry_count: 0,
+                head_sha256: hash('b'),
+            },
+            &audit_policy_sha256,
+            &policy,
+        ),
+        Err(RetentionCheckpointError::InvalidCheckpoint("boundary"))
+    ));
+    assert!(matches!(
+        export_retention_checkpoint(
+            &RetentionExpectation {
+                entry_count: 1,
+                head_sha256: hash('0'),
+            },
+            &audit_policy_sha256,
+            &policy,
+        ),
+        Err(RetentionCheckpointError::InvalidCheckpoint("boundary"))
+    ));
+}
+
+#[test]
+fn previous_authenticated_boundary_detects_rollback_and_history_replacement() {
+    let fixture = Fixture::new(7);
+    let root = populated_ledger(&fixture, 2);
+    let entries =
+        verify_audit_ledger(&root, &fixture.policy_bytes, &fixture.policy_sha256).unwrap();
+    let checkpoint_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = checkpoint_policy(&checkpoint_key);
+    let policy_bytes = canonical_retention_checkpoint_policy_bytes(&policy).unwrap();
+    let policy_sha256 = retention_checkpoint_policy_sha256(&policy).unwrap();
+    let (first_bytes, first_signature) = signed_retention_checkpoint(
+        &checkpoint_key,
+        &policy,
+        &fixture.policy_sha256,
+        RetentionExpectation {
+            entry_count: 1,
+            head_sha256: entries[0].entry_sha256.clone(),
+        },
+    );
+    let first = verify_retention_checkpoint(
+        &first_bytes,
+        "checkpoint-auditor-1",
+        &first_signature,
+        &policy_bytes,
+        &policy_sha256,
+    )
+    .unwrap();
+    let (second_bytes, second_signature) = signed_retention_checkpoint(
+        &checkpoint_key,
+        &policy,
+        &fixture.policy_sha256,
+        RetentionExpectation {
+            entry_count: 2,
+            head_sha256: entries[1].entry_sha256.clone(),
+        },
+    );
+    let second = verify_retention_checkpoint_against_ledger(
+        &root,
+        &fixture.policy_bytes,
+        &fixture.policy_sha256,
+        &second_bytes,
+        "checkpoint-auditor-1",
+        &second_signature,
+        &policy_bytes,
+        &policy_sha256,
+        Some(&first),
+    )
+    .unwrap();
+
+    fs::remove_file(root.join("00000000000000000002.json")).unwrap();
+    assert!(matches!(
+        verify_retention_checkpoint_against_ledger(
+            &root,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &first_bytes,
+            "checkpoint-auditor-1",
+            &first_signature,
+            &policy_bytes,
+            &policy_sha256,
+            Some(&second),
+        ),
+        Err(RetentionCheckpointError::RollbackDetected)
+    ));
+
+    let (replacement_bytes, replacement_signature) = signed_retention_checkpoint(
+        &checkpoint_key,
+        &policy,
+        &fixture.policy_sha256,
+        RetentionExpectation {
+            entry_count: 1,
+            head_sha256: hash('c'),
+        },
+    );
+    let replaced = verify_retention_checkpoint(
+        &replacement_bytes,
+        "checkpoint-auditor-1",
+        &replacement_signature,
+        &policy_bytes,
+        &policy_sha256,
+    )
+    .unwrap();
+    assert!(matches!(
+        verify_retention_checkpoint_against_ledger(
+            &root,
+            &fixture.policy_bytes,
+            &fixture.policy_sha256,
+            &first_bytes,
+            "checkpoint-auditor-1",
+            &first_signature,
+            &policy_bytes,
+            &policy_sha256,
+            Some(&replaced),
+        ),
+        Err(RetentionCheckpointError::RollbackDetected)
+    ));
+    cleanup(root);
+}
+
+fn checkpoint_policy(key: &SigningKey) -> RetentionCheckpointPolicy {
+    RetentionCheckpointPolicy {
+        checkpoint_domain: "bloch-prod-retention-checkpoint-1".into(),
+        ledger_id: "bloch-prod-retention-ledger-1".into(),
+        signers: vec![RetentionCheckpointSigner {
+            signer_id: "checkpoint-auditor-1".into(),
+            ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().to_bytes())),
+        }],
+    }
+}
+
+fn signed_retention_checkpoint(
+    key: &SigningKey,
+    policy: &RetentionCheckpointPolicy,
+    audit_policy_sha256: &str,
+    boundary: RetentionExpectation,
+) -> (Vec<u8>, [u8; 64]) {
+    let bytes = export_retention_checkpoint(&boundary, audit_policy_sha256, policy).unwrap();
+    let message =
+        retention_checkpoint_signature_message(&bytes, "checkpoint-auditor-1", policy).unwrap();
+    (bytes, key.sign(&message).to_bytes())
 }
 
 fn populated_ledger(fixture: &Fixture, count: usize) -> PathBuf {

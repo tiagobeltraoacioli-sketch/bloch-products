@@ -36,11 +36,19 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-indexer-delivery-transport`: bounded canonical request/response codecs
   that authenticate embedded deliveries and receipts while leaving sockets and
   HTTP/RPC operation to the caller.
+- `bloch-indexer-delivery-worker`: crash-recoverable local spool joining durable
+  claims, externally signed deliveries, transport artifacts, authenticated
+  receipts and durable ACK/retry transitions.
+- `bloch-indexer-receiver-core`: durable receiver-side idempotency, exact bytes
+  for external receipt signing and recoverable canonical responses without
+  owning a private key.
 - `bloch-indexer-audit`: bounded canonical checkpoint artifacts and detached
   Ed25519 verification against an independently pinned audit policy.
 - `bloch-indexer-audit-retention`: private create-once local ledger for signed
   audit artifacts, with hash chaining and independently retained count/head
   expectations for truncation detection.
+- Signed, path-independent retention checkpoints bind ledger identity, audit
+  policy, entry count and head to a separately pinned checkpoint policy.
 - Unix snapshot mutations use a bounded local single-writer lock, reload the
   latest durable state while locked and reject unsafe lock files. Snapshot
   initialization is create-once and cannot overwrite existing state.
@@ -101,6 +109,9 @@ receipt-ACK coordinator; protocol verification alone never mutates state.
 Producer, receiver and audit authentication are
 not consensus finality. The indexer remains a local fail-closed core rather
 than a production service.
+
+The complete offline delivery lifecycle and crash boundaries are documented in
+[`docs/INDEXER-DELIVERY-OPERATIONS.md`](docs/INDEXER-DELIVERY-OPERATIONS.md).
 
 ## Product boundaries
 

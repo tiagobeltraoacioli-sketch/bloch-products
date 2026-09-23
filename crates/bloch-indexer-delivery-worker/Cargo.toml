@@ -1,0 +1,21 @@
+[package]
+name = "bloch-indexer-delivery-worker"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-indexer-core = { path = "../bloch-indexer-core" }
+bloch-indexer-delivery-protocol = { path = "../bloch-indexer-delivery-protocol" }
+bloch-indexer-delivery-transport = { path = "../bloch-indexer-delivery-transport" }
+bloch-indexer-receipt-ack = { path = "../bloch-indexer-receipt-ack" }
+hex.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-indexer-receiver-core = { path = "../bloch-indexer-receiver-core" }
+ed25519-dalek.workspace = true

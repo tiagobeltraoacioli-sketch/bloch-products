@@ -22,9 +22,11 @@ will follow working implementations and retained evidence.
    single-writer coordination are also implemented. Authenticated receipts can
    authorize a durable ACK with their evidence retained atomically in snapshot
    v4. Strict offline delivery transport codecs and local hash-chained signed
-   audit retention are implemented; caller-operated network transports, a real
-   receiver, independently replicated/WORM retention and distributed
-   database/HA operation remain open.
+   audit retention are implemented. A crash-recoverable sender spool, durable
+   idempotent receiver core and externally signed retention checkpoints are also
+   implemented; authenticated network adapters, external signer/HSM operation,
+   independently replicated/WORM retention and distributed database/HA
+   operation remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.

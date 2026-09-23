@@ -18,6 +18,18 @@ use std::io::{Read, Write};
 use std::path::Path;
 use thiserror::Error;
 
+mod checkpoint;
+
+pub use checkpoint::{
+    MAX_RETENTION_CHECKPOINT_BYTES, MAX_RETENTION_CHECKPOINT_POLICY_BYTES,
+    RETENTION_CHECKPOINT_POLICY_SCHEMA, RETENTION_CHECKPOINT_SCHEMA, RetentionCheckpointError,
+    RetentionCheckpointPolicy, RetentionCheckpointSigner, VerifiedRetentionCheckpoint,
+    canonical_retention_checkpoint_policy_bytes, export_retention_checkpoint,
+    parse_retention_checkpoint_policy, retention_checkpoint_policy_sha256,
+    retention_checkpoint_signature_message, verify_retention_checkpoint,
+    verify_retention_checkpoint_against_ledger,
+};
+
 pub const RETENTION_ENTRY_SCHEMA: &str = "bloch.data.outbox-audit-retention-entry.v1";
 pub const MAX_RETENTION_ENTRIES: usize = 100_000;
 pub const MAX_RETENTION_ENTRY_BYTES: u64 = 2 * 1024 * 1024;

@@ -75,6 +75,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-indexer-delivery-worker"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "bloch-indexer-delivery-transport",
+ "bloch-indexer-receipt-ack",
+ "bloch-indexer-receiver-core",
+ "ed25519-dalek",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-indexer-input"
 version = "0.1.0"
 dependencies = [
@@ -119,6 +137,22 @@ dependencies = [
  "bloch-indexer-delivery-protocol",
  "ed25519-dalek",
  "hex",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-indexer-receiver-core"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-delivery-protocol",
+ "bloch-indexer-delivery-transport",
+ "ed25519-dalek",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
  "sha2",
  "thiserror",
 ]

@@ -92,6 +92,20 @@ types, protocol version, deployment domain and request correlation, but opens
 no socket and implements no HTTP or RPC client/server. Correlation IDs are not
 signatures; delivery and receipt authentication remains the security boundary.
 
+`bloch-indexer-delivery-worker` provides a private local spool and a globally
+discoverable active-job intent. It recovers crashes around durable claim,
+externally signed delivery staging, response import, receipt verification and
+ACK/retry persistence. Job identity commits to the complete claim, canonical
+record digest and trust-policy digest. It owns no signer and performs no network
+I/O.
+
+`bloch-indexer-receiver-core` persists one accepted record outcome and separate
+delivery-attempt acceptances before exposing receipt-signing bytes. Exact replay
+recovers the same bytes or response. A later attempt after response loss can
+receive a new attempt-bound receipt without repeating the record outcome.
+Policy rotation for an already admitted record conflicts fail-closed and needs
+an explicit operator migration decision.
+
 Fully acknowledged batch prefixes can be compacted atomically. Queue schema v2
 retains transition tombstones, batch commitments and a cumulative hash chain
 from the immutable anchor to the compacted tip. Pending or partially delivered
@@ -110,6 +124,12 @@ policy pin, artifacts and signatures. A count and head hash retained outside
 the ledger detects tail truncation. This provides bounded local tamper evidence,
 not WORM storage, remote replication, multi-host coordination or finality; an
 operator must preserve the external expectation independently.
+
+Retention checkpoints turn that external expectation into a canonical,
+path-independent document signed by a checkpoint key from a separately pinned
+policy. Verification binds checkpoint domain, stable ledger ID, audit-policy
+digest, count and head, and can require ancestry from a previously verified
+checkpoint. It still does not make the local ledger WORM or replicated.
 
 Snapshot schema v4 stores canonical state, compacted/pending outbox, delivery
 cursor and authenticated acknowledgement evidence together. It intentionally
@@ -137,12 +157,14 @@ cargo test --locked --offline -p bloch-indexer-query
 cargo test --locked --offline -p bloch-indexer-protocol
 cargo test --locked --offline -p bloch-indexer-delivery-protocol
 cargo test --locked --offline -p bloch-indexer-delivery-transport
+cargo test --locked --offline -p bloch-indexer-delivery-worker
+cargo test --locked --offline -p bloch-indexer-receiver-core
 cargo test --locked --offline -p bloch-indexer-receipt-ack
 cargo test --locked --offline -p bloch-indexer-audit
 cargo test --locked --offline -p bloch-indexer-audit-retention
 ```
 
-The next indexer slices are caller-operated network adapters around these
-offline contracts, a real receiver service, independently replicated/WORM
-audit retention and database-backed distributed coordination. High availability
-is not part of this file-snapshot implementation.
+The next indexer slices are authenticated caller-operated network adapters
+around these offline contracts, external signer/HSM integration, independently
+replicated/WORM audit retention and database-backed distributed coordination.
+High availability is not part of this file-snapshot implementation.
