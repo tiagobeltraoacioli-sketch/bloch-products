@@ -8,6 +8,8 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
+pub mod authenticated;
+
 /// Hard ingestion limit, checked before JSON parsing or allocation by serde.
 pub const MAX_CANONICAL_BLOCK_JSON_BYTES: usize = 16 * 1024 * 1024;
 
@@ -38,11 +40,7 @@ pub fn parse_block(bytes: &[u8]) -> Result<CanonicalBlock, InputError> {
         });
     }
 
-    let mut duplicate_check = serde_json::Deserializer::from_slice(bytes);
-    DuplicateChecked
-        .deserialize(&mut duplicate_check)
-        .map_err(invalid_json)?;
-    duplicate_check.end().map_err(invalid_json)?;
+    reject_duplicate_keys(bytes)?;
 
     let block: CanonicalBlock = serde_json::from_slice(bytes).map_err(invalid_json)?;
     validate_canonical_block(&block)?;
@@ -51,6 +49,14 @@ pub fn parse_block(bytes: &[u8]) -> Result<CanonicalBlock, InputError> {
 
 fn invalid_json(error: serde_json::Error) -> InputError {
     InputError::InvalidJson(error.to_string())
+}
+
+pub(crate) fn reject_duplicate_keys(bytes: &[u8]) -> Result<(), InputError> {
+    let mut duplicate_check = serde_json::Deserializer::from_slice(bytes);
+    DuplicateChecked
+        .deserialize(&mut duplicate_check)
+        .map_err(invalid_json)?;
+    duplicate_check.end().map_err(invalid_json)
 }
 
 struct DuplicateChecked;

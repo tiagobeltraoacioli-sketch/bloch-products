@@ -14,9 +14,10 @@ will follow working implementations and retained evidence.
    organization-independence, ancestry and consensus-finality verifiers remain
    open.
 5. Anchored canonical indexer state machine, strict JSON input, atomic durable
-   snapshots, restart recovery and deterministic idempotent outbox —
-   implemented; authenticated ingestion, delivery/acknowledgement worker,
-   versioned read API, database/HA operation and SDK remain open.
+   snapshots, restart recovery, Ed25519 producer authentication, deterministic
+   outbox, durable offline claim/retry/ack state and versioned bounded read
+   contracts — implemented; network transports, receiver integration, safe
+   outbox compaction, database/HA operation and SDK remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.

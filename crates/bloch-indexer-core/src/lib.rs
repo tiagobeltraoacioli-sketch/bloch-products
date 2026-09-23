@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+pub mod delivery;
 pub mod outbox;
 pub mod storage;
 
@@ -218,6 +219,11 @@ impl CanonicalIndexer {
 
     pub fn anchor(&self) -> &BlockAnchor {
         &self.anchor
+    }
+
+    /// Returns the immutable network identity bound to this indexer.
+    pub fn network(&self) -> &ChainIdentity {
+        &self.network
     }
 
     fn canonical_hash(&self, height: u64) -> Option<&str> {

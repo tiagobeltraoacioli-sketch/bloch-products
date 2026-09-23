@@ -25,8 +25,24 @@ name = "bloch-indexer-input"
 version = "0.1.0"
 dependencies = [
  "bloch-indexer-core",
+ "bloch-indexer-query",
+ "ed25519-dalek",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-indexer-query"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 

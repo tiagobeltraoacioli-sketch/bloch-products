@@ -2,6 +2,7 @@
 members = [
   "crates/bloch-indexer-core",
   "crates/bloch-indexer-input",
+  "crates/bloch-indexer-query",
   "crates/bloch-verify-core",
   "crates/bloch-verify-cli",
 ]

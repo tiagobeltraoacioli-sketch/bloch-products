@@ -6,6 +6,7 @@
 
 use crate::{
     ApplyOutcome, BlockAnchor, CanonicalBlock, CanonicalIndexer, ChainIdentity, IndexerError,
+    delivery::{ClaimOutcome, DeliveryClaim, DeliveryError, OutboxDelivery, ResolutionOutcome},
     outbox::{OutboxError, OutboxQueue, build_outbox},
     validate_block,
 };
@@ -18,7 +19,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
-const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v1";
+const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v2";
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 static TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -38,12 +39,15 @@ pub enum StorageError {
     Indexer(#[from] IndexerError),
     #[error("outbox state is invalid: {0}")]
     Outbox(#[from] OutboxError),
+    #[error("outbox delivery state is invalid: {0}")]
+    Delivery(#[from] DeliveryError),
 }
 
 #[derive(Clone, Debug)]
 pub struct DurableState {
     pub indexer: CanonicalIndexer,
     pub outbox: OutboxQueue,
+    pub delivery: OutboxDelivery,
 }
 
 impl DurableState {
@@ -51,6 +55,7 @@ impl DurableState {
         Self {
             indexer,
             outbox: OutboxQueue::new(),
+            delivery: OutboxDelivery::new(),
         }
     }
 }
@@ -72,6 +77,7 @@ struct SnapshotPayload {
     canonical_blocks: Vec<CanonicalBlock>,
     seen_blocks: Vec<CanonicalBlock>,
     outbox: OutboxQueue,
+    delivery: OutboxDelivery,
 }
 
 /// Atomically persists the complete canonical and collision-detection state.
@@ -85,6 +91,7 @@ pub fn write_snapshot(state: &DurableState, path: &Path) -> Result<(), StorageEr
         canonical_blocks: indexer.blocks.values().cloned().collect(),
         seen_blocks: indexer.seen_blocks.values().cloned().collect(),
         outbox: state.outbox.clone(),
+        delivery: state.delivery.clone(),
     };
     let payload_bytes = serde_json::to_vec(&payload)?;
     let snapshot = Snapshot {
@@ -151,6 +158,63 @@ pub fn apply_and_persist(
     Ok(outcome)
 }
 
+/// Claims the first unacknowledged record and persists the lease before the
+/// caller is allowed to perform external delivery.
+pub fn claim_and_persist(
+    state: &mut DurableState,
+    path: &Path,
+    now_unix_seconds: u64,
+    lease_seconds: u64,
+    claim_token: &str,
+) -> Result<ClaimOutcome, StorageError> {
+    let mut candidate = state.clone();
+    let outcome = candidate.delivery.claim_next(
+        &candidate.outbox,
+        now_unix_seconds,
+        lease_seconds,
+        claim_token,
+    )?;
+    write_snapshot(&candidate, path)?;
+    *state = candidate;
+    Ok(outcome)
+}
+
+/// Persists acknowledgement before advancing the in-memory delivery cursor.
+pub fn acknowledge_and_persist(
+    state: &mut DurableState,
+    path: &Path,
+    claim: &DeliveryClaim,
+    now_unix_seconds: u64,
+) -> Result<ResolutionOutcome, StorageError> {
+    let mut candidate = state.clone();
+    let outcome = candidate
+        .delivery
+        .acknowledge(&candidate.outbox, claim, now_unix_seconds)?;
+    write_snapshot(&candidate, path)?;
+    *state = candidate;
+    Ok(outcome)
+}
+
+/// Releases a claim into a bounded retry delay and persists that schedule.
+pub fn retry_and_persist(
+    state: &mut DurableState,
+    path: &Path,
+    claim: &DeliveryClaim,
+    now_unix_seconds: u64,
+    retry_delay_seconds: u64,
+) -> Result<ResolutionOutcome, StorageError> {
+    let mut candidate = state.clone();
+    let outcome = candidate.delivery.schedule_retry(
+        &candidate.outbox,
+        claim,
+        now_unix_seconds,
+        retry_delay_seconds,
+    )?;
+    write_snapshot(&candidate, path)?;
+    *state = candidate;
+    Ok(outcome)
+}
+
 fn restore(payload: SnapshotPayload) -> Result<DurableState, StorageError> {
     let mut restored = CanonicalIndexer::new(
         payload.network.clone(),
@@ -193,6 +257,7 @@ fn restore(payload: SnapshotPayload) -> Result<DurableState, StorageError> {
     let state = DurableState {
         indexer: restored,
         outbox: payload.outbox,
+        delivery: payload.delivery,
     };
     validate_durable_state(&state)?;
     Ok(state)
@@ -200,6 +265,7 @@ fn restore(payload: SnapshotPayload) -> Result<DurableState, StorageError> {
 
 fn validate_durable_state(state: &DurableState) -> Result<(), StorageError> {
     state.outbox.validate()?;
+    state.delivery.validate(&state.outbox)?;
     let (_, tip_hash) = state.indexer.tip();
     match state.outbox.batches.as_slice() {
         [] if tip_hash != state.indexer.anchor.block_hash => {
@@ -640,6 +706,23 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_v1_is_not_implicitly_migrated() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        write_snapshot(&DurableState::new(indexer()), &path).unwrap();
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        snapshot["schema"] = serde_json::json!("bloch.data.indexer-snapshot.v1");
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+
+        assert!(matches!(
+            load_snapshot(&path),
+            Err(StorageError::InvalidSnapshot("schema"))
+        ));
+    }
+
+    #[test]
     fn durable_transition_replaces_snapshot_and_recovers_new_tip() {
         let directory = private_directory();
         let path = directory.join("indexer.snapshot.json");
@@ -681,6 +764,64 @@ mod tests {
         ));
         assert_eq!(recovered.outbox.batches.len(), 3);
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn claim_retry_and_ack_progress_survive_recovery() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        apply_and_persist(&mut state, block(102, '3', '2'), &path).unwrap();
+
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('a')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        let mut recovered = load_snapshot(&path).unwrap();
+        assert_eq!(recovered.delivery.pending_position(), (0, 0));
+        assert_eq!(
+            retry_and_persist(&mut recovered, &path, &claim, 1_800_000_001, 10).unwrap(),
+            ResolutionOutcome::Applied
+        );
+
+        let mut recovered = load_snapshot(&path).unwrap();
+        assert!(matches!(
+            claim_and_persist(&mut recovered, &path, 1_800_000_010, 30, &hash('b')).unwrap(),
+            ClaimOutcome::Unavailable {
+                retry_at_unix_seconds: 1_800_000_011
+            }
+        ));
+        let retry = match claim_and_persist(&mut recovered, &path, 1_800_000_011, 30, &hash('b'))
+            .unwrap()
+        {
+            ClaimOutcome::Claimed { claim, .. } => claim,
+            outcome => panic!("expected retry claim, got {outcome:?}"),
+        };
+        acknowledge_and_persist(&mut recovered, &path, &retry, 1_800_000_012).unwrap();
+        assert_eq!(
+            load_snapshot(&path).unwrap().delivery.pending_position(),
+            (1, 0)
+        );
+    }
+
+    #[test]
+    fn failed_claim_resolution_persistence_does_not_advance_cursor() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let missing = directory.join("missing").join("snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('a')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        let before = state.delivery.clone();
+        assert!(acknowledge_and_persist(&mut state, &missing, &claim, 1_800_000_001).is_err());
+        assert_eq!(state.delivery, before);
+        assert_eq!(state.delivery.pending_position(), (0, 0));
     }
 
     #[test]
