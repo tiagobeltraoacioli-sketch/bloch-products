@@ -7,11 +7,15 @@
 use crate::{InputError, MAX_CANONICAL_BLOCK_JSON_BYTES, parse_block, reject_duplicate_keys};
 use bloch_indexer_core::{BlockAnchor, CanonicalBlock, CanonicalIndexer, ChainIdentity};
 use ed25519_dalek::{Signature, VerifyingKey};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const ENVELOPE_SCHEMA: &str = "bloch.indexer.authenticated-block.v1";
+/// The only authentication-policy schema accepted by this crate.
+pub const AUTHENTICATION_POLICY_SCHEMA: &str = "bloch.indexer.authentication-policy.v1";
+/// Policies are operator configuration, not an unbounded data channel.
+pub const MAX_AUTHENTICATION_POLICY_JSON_BYTES: usize = 64 * 1024;
 const SIGNATURE_PROTOCOL_DOMAIN: &[u8] = b"bloch.indexer.authenticated-block.signature.v1";
 const MAX_ENVELOPE_OVERHEAD_BYTES: usize = 64 * 1024;
 /// A hex-encoded maximum-size block plus bounded envelope metadata.
@@ -48,6 +52,16 @@ pub enum AuthenticationError {
     Empty,
     #[error("authenticated envelope is too large: {actual} bytes exceeds the {maximum} byte limit")]
     TooLarge { actual: usize, maximum: usize },
+    #[error("authentication policy JSON is empty")]
+    PolicyEmpty,
+    #[error(
+        "authentication policy JSON is too large: {actual} bytes exceeds the {maximum} byte limit"
+    )]
+    PolicyTooLarge { actual: usize, maximum: usize },
+    #[error("invalid authentication policy JSON: {0}")]
+    InvalidPolicyJson(String),
+    #[error("authentication policy digest mismatch")]
+    PolicyDigestMismatch,
     #[error("invalid authenticated envelope JSON: {0}")]
     InvalidJson(String),
     #[error("invalid authentication policy: {0}")]
@@ -77,6 +91,122 @@ struct AuthenticatedEnvelope {
     canonical_block_hex: String,
     canonical_block_sha256: String,
     signature: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthenticationPolicyDocument {
+    schema: String,
+    deployment_domain: String,
+    network: ChainIdentity,
+    anchor: BlockAnchor,
+    producers: Vec<TrustedProducerDocument>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TrustedProducerDocument {
+    producer_id: String,
+    ed25519_public_key: String,
+}
+
+/// Parses a strictly encoded, versioned policy and verifies its canonical
+/// SHA-256 digest against a value provisioned by the caller.
+///
+/// `expected_sha256` is part of the local trust configuration. It must never
+/// be copied from an authenticated-block envelope or from the same untrusted
+/// transport as `bytes`.
+pub fn parse_authentication_policy(
+    bytes: &[u8],
+    expected_sha256: &str,
+) -> Result<AuthenticationPolicy, AuthenticationError> {
+    if bytes.is_empty() {
+        return Err(AuthenticationError::PolicyEmpty);
+    }
+    if bytes.len() > MAX_AUTHENTICATION_POLICY_JSON_BYTES {
+        return Err(AuthenticationError::PolicyTooLarge {
+            actual: bytes.len(),
+            maximum: MAX_AUTHENTICATION_POLICY_JSON_BYTES,
+        });
+    }
+    reject_duplicate_keys(bytes)
+        .map_err(|error| AuthenticationError::InvalidPolicyJson(input_error_message(error)))?;
+    let document: AuthenticationPolicyDocument = serde_json::from_slice(bytes)
+        .map_err(|error| AuthenticationError::InvalidPolicyJson(error.to_string()))?;
+    if document.schema != AUTHENTICATION_POLICY_SCHEMA {
+        return Err(AuthenticationError::InvalidPolicy("schema"));
+    }
+    let mut policy = AuthenticationPolicy {
+        deployment_domain: document.deployment_domain,
+        network: document.network,
+        anchor: document.anchor,
+        producers: document
+            .producers
+            .into_iter()
+            .map(|producer| TrustedProducer {
+                producer_id: producer.producer_id,
+                ed25519_public_key: producer.ed25519_public_key,
+            })
+            .collect(),
+    };
+    policy.producers.sort_by(|left, right| {
+        left.producer_id
+            .cmp(&right.producer_id)
+            .then_with(|| left.ed25519_public_key.cmp(&right.ed25519_public_key))
+    });
+    validate_policy(&policy)?;
+
+    let expected = decode_hex_exact(expected_sha256, 32)
+        .map_err(|_| AuthenticationError::InvalidPolicy("expectedSha256"))?;
+    let canonical = canonical_authentication_policy_bytes(&policy)?;
+    if Sha256::digest(canonical).as_slice() != expected.as_slice() {
+        return Err(AuthenticationError::PolicyDigestMismatch);
+    }
+    Ok(policy)
+}
+
+/// Returns the canonical JSON representation used to pin a policy digest.
+///
+/// Object fields have a frozen order and producers are sorted by producer ID,
+/// then public key. Equivalent policies therefore have the same bytes even if
+/// their source JSON field or producer order differs.
+pub fn canonical_authentication_policy_bytes(
+    policy: &AuthenticationPolicy,
+) -> Result<Vec<u8>, AuthenticationError> {
+    validate_policy(policy)?;
+    let mut producers: Vec<_> = policy
+        .producers
+        .iter()
+        .map(|producer| TrustedProducerDocument {
+            producer_id: producer.producer_id.clone(),
+            ed25519_public_key: producer.ed25519_public_key.clone(),
+        })
+        .collect();
+    producers.sort_by(|left, right| {
+        left.producer_id
+            .cmp(&right.producer_id)
+            .then_with(|| left.ed25519_public_key.cmp(&right.ed25519_public_key))
+    });
+    serde_json::to_vec(&AuthenticationPolicyDocument {
+        schema: AUTHENTICATION_POLICY_SCHEMA.into(),
+        deployment_domain: policy.deployment_domain.clone(),
+        network: policy.network.clone(),
+        anchor: policy.anchor.clone(),
+        producers,
+    })
+    .map_err(|error| AuthenticationError::InvalidPolicyJson(error.to_string()))
+}
+
+/// Computes the lowercase `0x`-prefixed digest operators pin independently.
+pub fn authentication_policy_sha256(
+    policy: &AuthenticationPolicy,
+) -> Result<String, AuthenticationError> {
+    Ok(format!(
+        "0x{}",
+        hex::encode(Sha256::digest(canonical_authentication_policy_bytes(
+            policy
+        )?))
+    ))
 }
 
 /// Verifies and decodes a single authenticated canonical-block envelope.
@@ -383,6 +513,33 @@ mod tests {
     }
 
     #[test]
+    fn envelope_cannot_present_a_policy_or_producer_key() {
+        let fixture = Fixture::new();
+        let encoded = fixture.envelope(&fixture.block_bytes, None);
+
+        for (field, value) in [
+            (
+                "ed25519PublicKey",
+                Value::String(fixture.policy.producers[0].ed25519_public_key.clone()),
+            ),
+            (
+                "authenticationPolicy",
+                serde_json::from_slice(&policy_json(&fixture.policy, false)).unwrap(),
+            ),
+        ] {
+            let mut envelope: Value = serde_json::from_slice(&encoded).unwrap();
+            envelope[field] = value;
+            assert!(matches!(
+                verify_authenticated_block(
+                    &serde_json::to_vec(&envelope).unwrap(),
+                    &fixture.policy
+                ),
+                Err(AuthenticationError::InvalidJson(message)) if message.contains("unknown field")
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_a_signed_block_with_duplicate_inner_keys() {
         let fixture = Fixture::new();
         let malicious = String::from_utf8(fixture.block_bytes.clone())
@@ -457,6 +614,181 @@ mod tests {
             verify_authenticated_block(&fixture.envelope(&fixture.block_bytes, None), &duplicate)
                 .unwrap_err(),
             AuthenticationError::InvalidPolicy("duplicateProducer")
+        );
+    }
+
+    #[test]
+    fn policy_digest_is_canonical_across_field_and_producer_reordering() {
+        let fixture = Fixture::new();
+        let second_key = SigningKey::from_bytes(&[8; 32]);
+        let mut policy = fixture.policy.clone();
+        policy.producers.push(TrustedProducer {
+            producer_id: "producer-2".into(),
+            ed25519_public_key: format!("0x{}", hex::encode(second_key.verifying_key().as_bytes())),
+        });
+        let digest = authentication_policy_sha256(&policy).unwrap();
+        let first = policy_json(&policy, false);
+        let second = format!(
+            concat!(
+                "{{\"producers\":{},\"anchor\":{},\"network\":{},",
+                "\"deploymentDomain\":{},\"schema\":{}}}"
+            ),
+            serde_json::to_string(&serde_json::json!([
+                {
+                    "ed25519PublicKey": policy.producers[1].ed25519_public_key,
+                    "producerId": policy.producers[1].producer_id,
+                },
+                {
+                    "ed25519PublicKey": policy.producers[0].ed25519_public_key,
+                    "producerId": policy.producers[0].producer_id,
+                }
+            ]))
+            .unwrap(),
+            serde_json::to_string(&policy.anchor).unwrap(),
+            serde_json::to_string(&policy.network).unwrap(),
+            serde_json::to_string(&policy.deployment_domain).unwrap(),
+            serde_json::to_string(AUTHENTICATION_POLICY_SCHEMA).unwrap(),
+        );
+
+        assert_eq!(
+            parse_authentication_policy(&first, &digest).unwrap(),
+            policy
+        );
+        assert_eq!(
+            parse_authentication_policy(second.as_bytes(), &digest).unwrap(),
+            policy
+        );
+    }
+
+    #[test]
+    fn canonical_policy_digest_encoding_is_frozen() {
+        let fixture = Fixture::new();
+        assert_eq!(
+            authentication_policy_sha256(&fixture.policy).unwrap(),
+            "0xc8cc06c48335a4bff3d67245b106550f364e4364587d6ebd4627e2e05812fa1f"
+        );
+    }
+
+    #[test]
+    fn policy_parser_rejects_wrong_digest_duplicates_unknowns_and_trailing_json() {
+        let fixture = Fixture::new();
+        let bytes = policy_json(&fixture.policy, false);
+        assert_eq!(
+            parse_authentication_policy(&bytes, &hash('0')).unwrap_err(),
+            AuthenticationError::PolicyDigestMismatch
+        );
+        assert_eq!(
+            parse_authentication_policy(&bytes, "0xNOT-A-DIGEST").unwrap_err(),
+            AuthenticationError::InvalidPolicy("expectedSha256")
+        );
+
+        let text = String::from_utf8(bytes).unwrap();
+        let duplicate = text.replacen(
+            "\"schema\":",
+            "\"schema\":\"bloch.indexer.authentication-policy.v1\",\"schema\":",
+            1,
+        );
+        assert!(matches!(
+            parse_authentication_policy(duplicate.as_bytes(), &hash('0')),
+            Err(AuthenticationError::InvalidPolicyJson(message)) if message.contains("duplicate")
+        ));
+        let unknown = text.replacen('{', "{\"activate\":true,", 1);
+        assert!(matches!(
+            parse_authentication_policy(unknown.as_bytes(), &hash('0')),
+            Err(AuthenticationError::InvalidPolicyJson(message)) if message.contains("unknown field")
+        ));
+        assert!(matches!(
+            parse_authentication_policy(format!("{text} {{}}").as_bytes(), &hash('0')),
+            Err(AuthenticationError::InvalidPolicyJson(_))
+        ));
+    }
+
+    #[test]
+    fn policy_parser_rejects_ambiguous_producers() {
+        let fixture = Fixture::new();
+        let mut duplicate_id = fixture.policy.clone();
+        duplicate_id
+            .producers
+            .push(duplicate_id.producers[0].clone());
+        let bytes = policy_json(&duplicate_id, false);
+        assert_eq!(
+            parse_authentication_policy(&bytes, &hash('0')).unwrap_err(),
+            AuthenticationError::InvalidPolicy("duplicateProducer")
+        );
+
+        let second_key = SigningKey::from_bytes(&[8; 32]);
+        let mut duplicate_id = fixture.policy.clone();
+        duplicate_id.producers.push(TrustedProducer {
+            producer_id: "producer-1".into(),
+            ed25519_public_key: format!("0x{}", hex::encode(second_key.verifying_key().as_bytes())),
+        });
+        assert_eq!(
+            parse_authentication_policy(&policy_json(&duplicate_id, false), &hash('0'))
+                .unwrap_err(),
+            AuthenticationError::InvalidPolicy("duplicateProducer")
+        );
+
+        let mut duplicate_key = fixture.policy.clone();
+        duplicate_key.producers.push(TrustedProducer {
+            producer_id: "producer-2".into(),
+            ed25519_public_key: duplicate_key.producers[0].ed25519_public_key.clone(),
+        });
+        assert_eq!(
+            parse_authentication_policy(&policy_json(&duplicate_key, false), &hash('0'))
+                .unwrap_err(),
+            AuthenticationError::InvalidPolicy("duplicateProducer")
+        );
+
+        // A distinct producer remains valid; keep the key alive to make the
+        // intended distinction explicit in this adversarial fixture.
+        duplicate_key.producers[1].ed25519_public_key =
+            format!("0x{}", hex::encode(second_key.verifying_key().as_bytes()));
+        assert!(authentication_policy_sha256(&duplicate_key).is_ok());
+    }
+
+    #[test]
+    fn pinned_policy_digest_rejects_network_and_anchor_substitution() {
+        let fixture = Fixture::new();
+        let digest = authentication_policy_sha256(&fixture.policy).unwrap();
+
+        let mut other_network = fixture.policy.clone();
+        other_network.network.chain_id = 700_772;
+        assert_eq!(
+            parse_authentication_policy(&policy_json(&other_network, false), &digest).unwrap_err(),
+            AuthenticationError::PolicyDigestMismatch
+        );
+
+        let mut other_anchor = fixture.policy.clone();
+        other_anchor.anchor.block_hash = hash('2');
+        assert_eq!(
+            parse_authentication_policy(&policy_json(&other_anchor, false), &digest).unwrap_err(),
+            AuthenticationError::PolicyDigestMismatch
+        );
+    }
+
+    #[test]
+    fn policy_parser_applies_its_own_size_and_schema_boundaries() {
+        assert_eq!(
+            parse_authentication_policy(&[], &hash('0')).unwrap_err(),
+            AuthenticationError::PolicyEmpty
+        );
+        let oversized = vec![b' '; MAX_AUTHENTICATION_POLICY_JSON_BYTES + 1];
+        assert_eq!(
+            parse_authentication_policy(&oversized, &hash('0')).unwrap_err(),
+            AuthenticationError::PolicyTooLarge {
+                actual: MAX_AUTHENTICATION_POLICY_JSON_BYTES + 1,
+                maximum: MAX_AUTHENTICATION_POLICY_JSON_BYTES,
+            }
+        );
+
+        let fixture = Fixture::new();
+        let mut wrong_schema: Value =
+            serde_json::from_slice(&policy_json(&fixture.policy, false)).unwrap();
+        wrong_schema["schema"] = Value::String("bloch.indexer.authentication-policy.v2".into());
+        assert_eq!(
+            parse_authentication_policy(&serde_json::to_vec(&wrong_schema).unwrap(), &hash('0'))
+                .unwrap_err(),
+            AuthenticationError::InvalidPolicy("schema")
         );
     }
 
@@ -545,5 +877,29 @@ mod tests {
 
     fn hash(character: char) -> String {
         format!("0x{}", character.to_string().repeat(64))
+    }
+
+    fn policy_json(policy: &AuthenticationPolicy, reverse_producers: bool) -> Vec<u8> {
+        let mut producer_order: Vec<_> = policy.producers.iter().collect();
+        if reverse_producers {
+            producer_order.reverse();
+        }
+        let producers: Vec<_> = producer_order
+            .into_iter()
+            .map(|producer| {
+                json!({
+                    "producerId": producer.producer_id,
+                    "ed25519PublicKey": producer.ed25519_public_key,
+                })
+            })
+            .collect();
+        serde_json::to_vec(&json!({
+            "schema": AUTHENTICATION_POLICY_SCHEMA,
+            "deploymentDomain": policy.deployment_domain,
+            "network": policy.network,
+            "anchor": policy.anchor,
+            "producers": producers,
+        }))
+        .unwrap()
     }
 }

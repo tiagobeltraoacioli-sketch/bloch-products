@@ -16,8 +16,10 @@ will follow working implementations and retained evidence.
 5. Anchored canonical indexer state machine, strict JSON input, atomic durable
    snapshots, restart recovery, Ed25519 producer authentication, deterministic
    outbox, durable offline claim/retry/ack state and versioned bounded read
-   contracts — implemented; network transports, receiver integration, safe
-   outbox compaction, database/HA operation and SDK remain open.
+   contracts — implemented. Canonical producer-policy pinning, bounded safe
+   outbox compaction and a strict transport-neutral read protocol/SDK are also
+   implemented; authenticated network transports, receiver integration,
+   external audit retention and database/HA operation remain open.
 6. Non-custodial treasury policy evaluation and payment reconciliation.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.

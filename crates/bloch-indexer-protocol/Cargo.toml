@@ -1,0 +1,12 @@
+[package]
+name = "bloch-indexer-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-indexer-core = { path = "../bloch-indexer-core" }
+bloch-indexer-query = { path = "../bloch-indexer-query" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

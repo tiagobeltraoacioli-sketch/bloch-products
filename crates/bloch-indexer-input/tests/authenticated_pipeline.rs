@@ -1,6 +1,7 @@
 use bloch_indexer_core::{ApplyOutcome, BlockAnchor, CanonicalIndexer, ChainIdentity};
 use bloch_indexer_input::authenticated::{
-    AuthenticationPolicy, TrustedProducer, build_signature_message, verify_authenticated_block,
+    AuthenticationPolicy, TrustedProducer, authentication_policy_sha256, build_signature_message,
+    canonical_authentication_policy_bytes, parse_authentication_policy, verify_authenticated_block,
 };
 use bloch_indexer_query::{FinalityStatus, ReadApiV1};
 use ed25519_dalek::{Signer, SigningKey};
@@ -31,7 +32,7 @@ fn authenticated_bytes_flow_into_network_bound_nonfinal_read_state() {
     }))
     .unwrap();
     let signing_key = SigningKey::from_bytes(&[11; 32]);
-    let policy = AuthenticationPolicy {
+    let configured_policy = AuthenticationPolicy {
         deployment_domain: "bloch-l2-prod-indexer-1".into(),
         network: network.clone(),
         anchor: anchor.clone(),
@@ -43,6 +44,9 @@ fn authenticated_bytes_flow_into_network_bound_nonfinal_read_state() {
             ),
         }],
     };
+    let policy_bytes = canonical_authentication_policy_bytes(&configured_policy).unwrap();
+    let expected_policy_sha256 = authentication_policy_sha256(&configured_policy).unwrap();
+    let policy = parse_authentication_policy(&policy_bytes, &expected_policy_sha256).unwrap();
     let message = build_signature_message(
         &policy.deployment_domain,
         &network,

@@ -35,6 +35,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-indexer-protocol"
+version = "0.1.0"
+dependencies = [
+ "bloch-indexer-core",
+ "bloch-indexer-query",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-indexer-query"
 version = "0.1.0"
 dependencies = [

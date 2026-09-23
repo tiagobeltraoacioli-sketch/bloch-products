@@ -5,16 +5,46 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 pub const OUTBOX_BATCH_SCHEMA: &str = "bloch.data.outbox-batch.v1";
-pub const OUTBOX_QUEUE_SCHEMA: &str = "bloch.data.outbox-queue.v1";
+pub const OUTBOX_QUEUE_SCHEMA: &str = "bloch.data.outbox-queue.v2";
+pub const OUTBOX_CHECKPOINT_SCHEMA: &str = "bloch.data.outbox-checkpoint.v1";
+pub const OUTBOX_CHECKPOINT_LINK_SCHEMA: &str = "bloch.data.outbox-checkpoint-link.v1";
 pub const OUTBOX_RECORD_SCHEMA: &str = "bloch.data.webhook-record.v1";
 const MAX_REVERTED_BLOCKS: usize = 4_096;
 const MAX_PENDING_BATCHES: usize = 100_000;
+const MAX_COMPACTED_BATCHES: usize = 50_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct OutboxQueue {
     pub schema: String,
+    pub checkpoint: Option<OutboxCheckpoint>,
     pub batches: Vec<OutboxBatch>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OutboxCheckpoint {
+    pub schema: String,
+    pub network: ChainIdentity,
+    pub anchor_tip_hash: String,
+    pub compacted_tip_hash: String,
+    pub batch_count: u64,
+    pub record_count: u64,
+    pub chain_hash: String,
+    /// Compact, replay-resistant evidence for every removed transition.
+    pub links: Vec<OutboxCheckpointLink>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OutboxCheckpointLink {
+    pub schema: String,
+    pub transition_id: String,
+    pub previous_tip_hash: String,
+    pub new_tip_hash: String,
+    pub record_count: u64,
+    pub batch_hash: String,
+    pub chain_hash: String,
 }
 
 impl Default for OutboxQueue {
@@ -27,6 +57,7 @@ impl OutboxQueue {
     pub fn new() -> Self {
         Self {
             schema: OUTBOX_QUEUE_SCHEMA.into(),
+            checkpoint: None,
             batches: Vec::new(),
         }
     }
@@ -40,6 +71,17 @@ impl OutboxQueue {
         let mut records = BTreeSet::new();
         let mut queue_network = None;
         let mut expected_previous_tip: Option<&str> = None;
+        if let Some(checkpoint) = &self.checkpoint {
+            validate_checkpoint(checkpoint)?;
+            queue_network = Some(&checkpoint.network);
+            expected_previous_tip = Some(checkpoint.compacted_tip_hash.as_str());
+            transitions.extend(
+                checkpoint
+                    .links
+                    .iter()
+                    .map(|link| link.transition_id.as_str()),
+            );
+        }
         for batch in &self.batches {
             validate_batch(batch)?;
             let batch_network = &batch
@@ -69,6 +111,92 @@ impl OutboxQueue {
         Ok(())
     }
 
+    /// Removes a fully acknowledged prefix while retaining a bounded,
+    /// hash-chained checkpoint and permanent transition tombstones.
+    pub(crate) fn compact_prefix(
+        &mut self,
+        network: &ChainIdentity,
+        anchor_tip_hash: &str,
+        acknowledged_batches: usize,
+    ) -> Result<CompactionSummary, OutboxError> {
+        self.validate()?;
+        validate_network(network).map_err(|_| OutboxError::InvalidQueue("checkpointNetwork"))?;
+        if !valid_hash(anchor_tip_hash, true)
+            || acknowledged_batches == 0
+            || acknowledged_batches > self.batches.len()
+        {
+            return Err(OutboxError::InvalidCompaction("batchCount"));
+        }
+
+        let mut checkpoint = self.checkpoint.clone().unwrap_or_else(|| OutboxCheckpoint {
+            schema: OUTBOX_CHECKPOINT_SCHEMA.into(),
+            network: network.clone(),
+            anchor_tip_hash: anchor_tip_hash.into(),
+            compacted_tip_hash: anchor_tip_hash.into(),
+            batch_count: 0,
+            record_count: 0,
+            chain_hash: initial_checkpoint_hash(network, anchor_tip_hash),
+            links: Vec::new(),
+        });
+        if checkpoint.network != *network || checkpoint.anchor_tip_hash != anchor_tip_hash {
+            return Err(OutboxError::InvalidCompaction("checkpointIdentity"));
+        }
+        let final_tombstones = checkpoint
+            .links
+            .len()
+            .checked_add(acknowledged_batches)
+            .filter(|count| *count <= MAX_COMPACTED_BATCHES)
+            .ok_or(OutboxError::InvalidCompaction("checkpointCapacity"))?;
+        checkpoint
+            .links
+            .reserve(final_tombstones.saturating_sub(checkpoint.links.len()));
+
+        let mut removed_records = 0_u64;
+        for batch in self.batches.iter().take(acknowledged_batches) {
+            if batch.previous_tip_hash != checkpoint.compacted_tip_hash {
+                return Err(OutboxError::InvalidCompaction("tipContinuity"));
+            }
+            let batch_hash = checkpoint_batch_hash(batch);
+            checkpoint.chain_hash = checkpoint_link_hash(
+                &checkpoint.chain_hash,
+                &batch.transition_id,
+                &batch.previous_tip_hash,
+                &batch.new_tip_hash,
+                batch.records.len() as u64,
+                &batch_hash,
+            );
+            checkpoint.compacted_tip_hash = batch.new_tip_hash.clone();
+            checkpoint.batch_count = checkpoint
+                .batch_count
+                .checked_add(1)
+                .ok_or(OutboxError::InvalidCompaction("batchOverflow"))?;
+            removed_records = removed_records
+                .checked_add(batch.records.len() as u64)
+                .ok_or(OutboxError::InvalidCompaction("recordOverflow"))?;
+            checkpoint.record_count = checkpoint
+                .record_count
+                .checked_add(batch.records.len() as u64)
+                .ok_or(OutboxError::InvalidCompaction("recordOverflow"))?;
+            checkpoint.links.push(OutboxCheckpointLink {
+                schema: OUTBOX_CHECKPOINT_LINK_SCHEMA.into(),
+                transition_id: batch.transition_id.clone(),
+                previous_tip_hash: batch.previous_tip_hash.clone(),
+                new_tip_hash: batch.new_tip_hash.clone(),
+                record_count: batch.records.len() as u64,
+                batch_hash,
+                chain_hash: checkpoint.chain_hash.clone(),
+            });
+        }
+        self.batches.drain(..acknowledged_batches);
+        self.checkpoint = Some(checkpoint.clone());
+        self.validate()?;
+        Ok(CompactionSummary {
+            batches_removed: acknowledged_batches,
+            records_removed: removed_records,
+            checkpoint,
+        })
+    }
+
     /// Adds a complete transition or recognizes an exact replay.
     /// Validation happens before mutation, so a rejected batch leaves the queue unchanged.
     pub fn enqueue(&mut self, batch: OutboxBatch) -> Result<EnqueueOutcome, OutboxError> {
@@ -84,6 +212,14 @@ impl OutboxQueue {
             } else {
                 Err(OutboxError::InvalidQueue("transitionCollision"))
             };
+        }
+        if self.checkpoint.as_ref().is_some_and(|checkpoint| {
+            checkpoint
+                .links
+                .iter()
+                .any(|link| link.transition_id == batch.transition_id)
+        }) {
+            return Err(OutboxError::InvalidQueue("compactedTransitionReplay"));
         }
         if self.batches.len() == MAX_PENDING_BATCHES {
             return Err(OutboxError::InvalidQueue("capacity"));
@@ -110,10 +246,24 @@ impl OutboxQueue {
             {
                 return Err(OutboxError::InvalidQueue("networkContinuity"));
             }
+        } else if let Some(checkpoint) = &self.checkpoint {
+            if batch.previous_tip_hash != checkpoint.compacted_tip_hash {
+                return Err(OutboxError::InvalidQueue("tipContinuity"));
+            }
+            if batch.records.last().map(|record| &record.network) != Some(&checkpoint.network) {
+                return Err(OutboxError::InvalidQueue("networkContinuity"));
+            }
         }
         self.batches.push(batch);
         Ok(EnqueueOutcome::Added)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactionSummary {
+    pub batches_removed: usize,
+    pub records_removed: u64,
+    pub checkpoint: OutboxCheckpoint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +312,101 @@ pub enum OutboxError {
     InvalidBatch(&'static str),
     #[error("invalid outbox queue field: {0}")]
     InvalidQueue(&'static str),
+    #[error("invalid outbox compaction: {0}")]
+    InvalidCompaction(&'static str),
+}
+
+fn validate_checkpoint(checkpoint: &OutboxCheckpoint) -> Result<(), OutboxError> {
+    validate_network(&checkpoint.network)
+        .map_err(|_| OutboxError::InvalidQueue("checkpointNetwork"))?;
+    if checkpoint.schema != OUTBOX_CHECKPOINT_SCHEMA
+        || !valid_hash(&checkpoint.anchor_tip_hash, true)
+        || !valid_hash(&checkpoint.compacted_tip_hash, true)
+        || !valid_hash(&checkpoint.chain_hash, true)
+        || checkpoint.batch_count == 0
+        || checkpoint.record_count < checkpoint.batch_count
+        || checkpoint.links.len() > MAX_COMPACTED_BATCHES
+        || checkpoint.links.len() as u64 != checkpoint.batch_count
+    {
+        return Err(OutboxError::InvalidQueue("checkpointShape"));
+    }
+    let mut ids = BTreeSet::new();
+    let mut expected_tip = checkpoint.anchor_tip_hash.as_str();
+    let mut expected_chain = initial_checkpoint_hash(&checkpoint.network, expected_tip);
+    let mut records = 0_u64;
+    for link in &checkpoint.links {
+        if link.schema != OUTBOX_CHECKPOINT_LINK_SCHEMA
+            || !valid_hash(&link.transition_id, true)
+            || !ids.insert(link.transition_id.as_str())
+            || link.previous_tip_hash != expected_tip
+            || !valid_hash(&link.new_tip_hash, true)
+            || link.record_count == 0
+            || !valid_hash(&link.batch_hash, true)
+        {
+            return Err(OutboxError::InvalidQueue("checkpointTransitions"));
+        }
+        expected_chain = checkpoint_link_hash(
+            &expected_chain,
+            &link.transition_id,
+            &link.previous_tip_hash,
+            &link.new_tip_hash,
+            link.record_count,
+            &link.batch_hash,
+        );
+        if link.chain_hash != expected_chain {
+            return Err(OutboxError::InvalidQueue("checkpointHashChain"));
+        }
+        expected_tip = &link.new_tip_hash;
+        records = records
+            .checked_add(link.record_count)
+            .ok_or(OutboxError::InvalidQueue("checkpointRecordCount"))?;
+    }
+    if checkpoint.compacted_tip_hash != expected_tip
+        || checkpoint.chain_hash != expected_chain
+        || checkpoint.record_count != records
+    {
+        return Err(OutboxError::InvalidQueue("checkpointSummary"));
+    }
+    Ok(())
+}
+
+fn initial_checkpoint_hash(network: &ChainIdentity, anchor_tip_hash: &str) -> String {
+    let mut digest = StableDigest::new("bloch.data.outbox-checkpoint-genesis.v1");
+    digest.text(&network.network);
+    digest.number(network.chain_id);
+    digest.text(&network.genesis_hash);
+    digest.text(anchor_tip_hash);
+    digest.finish()
+}
+
+fn checkpoint_batch_hash(batch: &OutboxBatch) -> String {
+    let mut digest = StableDigest::new("bloch.data.outbox-checkpoint-batch.v1");
+    digest.text(&batch.transition_id);
+    digest.text(&batch.previous_tip_hash);
+    digest.text(&batch.new_tip_hash);
+    digest.number(batch.records.len() as u64);
+    for record in &batch.records {
+        digest.text(&record.id);
+    }
+    digest.finish()
+}
+
+fn checkpoint_link_hash(
+    previous: &str,
+    transition_id: &str,
+    previous_tip_hash: &str,
+    new_tip_hash: &str,
+    record_count: u64,
+    batch_hash: &str,
+) -> String {
+    let mut digest = StableDigest::new("bloch.data.outbox-checkpoint-link.v1");
+    digest.text(previous);
+    digest.text(transition_id);
+    digest.text(previous_tip_hash);
+    digest.text(new_tip_hash);
+    digest.number(record_count);
+    digest.text(batch_hash);
+    digest.finish()
 }
 
 /// Builds delivery-neutral records for one canonical state transition.
@@ -539,6 +784,7 @@ mod tests {
         let second = build_outbox(&network(), &hash('2'), &block(102, '3', '2'), &[]).unwrap();
         let queue = OutboxQueue {
             schema: OUTBOX_QUEUE_SCHEMA.into(),
+            checkpoint: None,
             batches: vec![second, first],
         };
         assert_eq!(
@@ -560,6 +806,7 @@ mod tests {
         let second = build_outbox(&other_network, &hash('2'), &other_block, &[]).unwrap();
         let queue = OutboxQueue {
             schema: OUTBOX_QUEUE_SCHEMA.into(),
+            checkpoint: None,
             batches: vec![first, second],
         };
         assert_eq!(
@@ -597,6 +844,59 @@ mod tests {
         .unwrap();
         assert_eq!(batch.records.len(), 3);
         assert_eq!(indexer.tip(), (101, hash('4').as_str()));
+    }
+
+    #[test]
+    fn compacted_checkpoint_preserves_continuity_and_blocks_replay() {
+        let first = build_outbox(&network(), &hash('1'), &block(101, '2', '1'), &[]).unwrap();
+        let second = build_outbox(&network(), &hash('2'), &block(102, '3', '2'), &[]).unwrap();
+        let third = build_outbox(&network(), &hash('3'), &block(103, '4', '3'), &[]).unwrap();
+        let mut queue = OutboxQueue::new();
+        queue.enqueue(first.clone()).unwrap();
+        queue.enqueue(second).unwrap();
+
+        let summary = queue.compact_prefix(&network(), &hash('1'), 1).unwrap();
+        assert_eq!(summary.batches_removed, 1);
+        assert_eq!(summary.records_removed, 1);
+        assert_eq!(summary.checkpoint.compacted_tip_hash, hash('2'));
+        assert_eq!(queue.batches[0].previous_tip_hash, hash('2'));
+        assert_eq!(queue.enqueue(third).unwrap(), EnqueueOutcome::Added);
+        assert_eq!(
+            queue.enqueue(first).unwrap_err(),
+            OutboxError::InvalidQueue("compactedTransitionReplay")
+        );
+        queue.validate().unwrap();
+    }
+
+    #[test]
+    fn checkpoint_tampering_and_wrong_continuation_fail_closed() {
+        let first = build_outbox(&network(), &hash('1'), &block(101, '2', '1'), &[]).unwrap();
+        let second = build_outbox(&network(), &hash('2'), &block(102, '3', '2'), &[]).unwrap();
+        let mut queue = OutboxQueue::new();
+        queue.enqueue(first).unwrap();
+        queue.enqueue(second).unwrap();
+        queue.compact_prefix(&network(), &hash('1'), 1).unwrap();
+
+        let mut missing_tombstone = queue.clone();
+        missing_tombstone.checkpoint.as_mut().unwrap().links.clear();
+        assert_eq!(
+            missing_tombstone.validate().unwrap_err(),
+            OutboxError::InvalidQueue("checkpointShape")
+        );
+
+        let mut changed_commitment = queue.clone();
+        changed_commitment.checkpoint.as_mut().unwrap().links[0].batch_hash = hash('7');
+        assert_eq!(
+            changed_commitment.validate().unwrap_err(),
+            OutboxError::InvalidQueue("checkpointHashChain")
+        );
+
+        let mut wrong_tip = queue;
+        wrong_tip.checkpoint.as_mut().unwrap().compacted_tip_hash = hash('8');
+        assert_eq!(
+            wrong_tip.validate().unwrap_err(),
+            OutboxError::InvalidQueue("checkpointSummary")
+        );
     }
 
     fn network() -> ChainIdentity {

@@ -14,7 +14,7 @@
       "id": "bloch-data-dev-cloud",
       "priority": "P1",
       "status": "core-in-development",
-      "capabilities": ["anchored-canonical-indexer", "authenticated-block-ingestion-contract", "bounded-reorg-state-machine", "durable-outbox-delivery-contract", "versioned-read-contract", "webhooks", "sdk", "sandbox"],
+      "capabilities": ["anchored-canonical-indexer", "authenticated-block-ingestion-contract", "pinned-producer-policy", "bounded-reorg-state-machine", "durable-outbox-delivery-contract", "bounded-outbox-compaction", "versioned-read-contract", "transport-neutral-read-sdk", "webhooks", "sandbox"],
       "gates": ["complete-indexer", "versioned-api", "observable-availability"]
     },
     {

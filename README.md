@@ -22,9 +22,11 @@ identity, prove finality, activate a network, or authorize asset movement.
   delivery leases.
 - `bloch-indexer-input`: bounded strict-JSON validation before canonical state
   transitions, plus Ed25519 producer authentication against independently
-  pinned keys.
+  pinned, canonical policy digests.
 - `bloch-indexer-query`: versioned, bounded, snapshot-bound read contracts for
   status, blocks and events.
+- `bloch-indexer-protocol`: strict, transport-neutral JSON dispatch and typed
+  SDK messages for the v1 read contract.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
 
@@ -73,12 +75,12 @@ retained canonical SHA-256.
 Real-world organizational independence and authenticated consensus
 finality/ancestry are not implemented yet.
 
-The indexer snapshot, pending outbox and delivery cursor are recovered together.
-The libraries define authentication, claim/retry/acknowledgement and read
-contracts, but perform no RPC ingestion, webhook delivery, HTTP serving or
-database-backed HA operation. Producer authentication is not consensus
-finality. The indexer remains a local fail-closed core rather than a production
-service.
+The indexer snapshot, pending outbox, compacted checkpoint and delivery cursor
+are recovered together. The libraries define authentication,
+claim/retry/acknowledgement and read contracts, but perform no RPC ingestion,
+webhook delivery, HTTP serving or database-backed HA operation. Producer
+authentication is not consensus finality. The indexer remains a local
+fail-closed core rather than a production service.
 
 ## Product boundaries
 

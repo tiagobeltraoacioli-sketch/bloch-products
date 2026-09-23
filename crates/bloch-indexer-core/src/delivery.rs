@@ -247,6 +247,30 @@ impl OutboxDelivery {
         (self.batch_cursor, self.record_cursor)
     }
 
+    /// Rebases cursors after storage removes a prefix consisting exclusively
+    /// of fully acknowledged batches. The caller must validate against the
+    /// compacted queue before committing the containing durable state.
+    pub(crate) fn rebase_after_compaction(
+        &mut self,
+        removed_batches: usize,
+    ) -> Result<(), DeliveryError> {
+        if removed_batches == 0 || removed_batches > self.batch_cursor {
+            return Err(DeliveryError::InvalidState("compactionCursor"));
+        }
+        let old_batch_cursor = self.batch_cursor;
+        self.batch_cursor -= removed_batches;
+        if removed_batches == old_batch_cursor
+            && self.last_resolution.as_ref().is_some_and(|resolution| {
+                matches!(resolution.disposition, ClaimDisposition::Acknowledged)
+            })
+        {
+            // The idempotent ACK replay window referred to the last removed
+            // record. Its transition tombstone now lives in the checkpoint.
+            self.last_resolution = None;
+        }
+        Ok(())
+    }
+
     fn current_record<'a>(
         &self,
         queue: &'a OutboxQueue,

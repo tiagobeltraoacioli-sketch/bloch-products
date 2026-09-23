@@ -7,7 +7,7 @@
 use crate::{
     ApplyOutcome, BlockAnchor, CanonicalBlock, CanonicalIndexer, ChainIdentity, IndexerError,
     delivery::{ClaimOutcome, DeliveryClaim, DeliveryError, OutboxDelivery, ResolutionOutcome},
-    outbox::{OutboxError, OutboxQueue, build_outbox},
+    outbox::{CompactionSummary, OutboxError, OutboxQueue, build_outbox},
     validate_block,
 };
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
-const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v2";
+const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v3";
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_COMPACTION_BATCHES_PER_CALL: usize = 10_000;
 static TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
@@ -41,6 +42,8 @@ pub enum StorageError {
     Outbox(#[from] OutboxError),
     #[error("outbox delivery state is invalid: {0}")]
     Delivery(#[from] DeliveryError),
+    #[error("invalid outbox compaction request: {0}")]
+    InvalidCompaction(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +218,34 @@ pub fn retry_and_persist(
     Ok(outcome)
 }
 
+/// Atomically checkpoints and removes a bounded prefix of fully acknowledged
+/// batches. Unacknowledged records and an active claim are never removed.
+pub fn compact_acknowledged_and_persist(
+    state: &mut DurableState,
+    path: &Path,
+    maximum_batches: usize,
+) -> Result<Option<CompactionSummary>, StorageError> {
+    if maximum_batches == 0 || maximum_batches > MAX_COMPACTION_BATCHES_PER_CALL {
+        return Err(StorageError::InvalidCompaction("maximumBatches"));
+    }
+    validate_durable_state(state)?;
+    let acknowledged_batches = state.delivery.pending_position().0;
+    if acknowledged_batches == 0 {
+        return Ok(None);
+    }
+    let remove = acknowledged_batches.min(maximum_batches);
+    let mut candidate = state.clone();
+    let summary = candidate.outbox.compact_prefix(
+        &candidate.indexer.network,
+        &candidate.indexer.anchor.block_hash,
+        remove,
+    )?;
+    candidate.delivery.rebase_after_compaction(remove)?;
+    write_snapshot(&candidate, path)?;
+    *state = candidate;
+    Ok(Some(summary))
+}
+
 fn restore(payload: SnapshotPayload) -> Result<DurableState, StorageError> {
     let mut restored = CanonicalIndexer::new(
         payload.network.clone(),
@@ -267,10 +298,18 @@ fn validate_durable_state(state: &DurableState) -> Result<(), StorageError> {
     state.outbox.validate()?;
     state.delivery.validate(&state.outbox)?;
     let (_, tip_hash) = state.indexer.tip();
-    match state.outbox.batches.as_slice() {
-        [] if tip_hash != state.indexer.anchor.block_hash => {
-            Err(StorageError::InvalidSnapshot("missingOutboxHistory"))
+    let history_tip = if let Some(checkpoint) = &state.outbox.checkpoint {
+        if checkpoint.network != state.indexer.network
+            || checkpoint.anchor_tip_hash != state.indexer.anchor.block_hash
+        {
+            return Err(StorageError::InvalidSnapshot("outboxCheckpointIdentity"));
         }
+        checkpoint.compacted_tip_hash.as_str()
+    } else {
+        state.indexer.anchor.block_hash.as_str()
+    };
+    match state.outbox.batches.as_slice() {
+        [] if tip_hash != history_tip => Err(StorageError::InvalidSnapshot("missingOutboxHistory")),
         [] => Ok(()),
         batches => {
             let first = batches
@@ -279,7 +318,7 @@ fn validate_durable_state(state: &DurableState) -> Result<(), StorageError> {
             let last = batches
                 .last()
                 .ok_or(StorageError::InvalidSnapshot("outbox"))?;
-            if first.previous_tip_hash != state.indexer.anchor.block_hash
+            if first.previous_tip_hash != history_tip
                 || last.new_tip_hash != tip_hash
                 || batches
                     .iter()
@@ -804,6 +843,164 @@ mod tests {
             load_snapshot(&path).unwrap().delivery.pending_position(),
             (1, 0)
         );
+    }
+
+    #[test]
+    fn acknowledged_prefix_compacts_recovers_and_accepts_new_batches() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        apply_and_persist(&mut state, block(102, '3', '2'), &path).unwrap();
+
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('d')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        acknowledge_and_persist(&mut state, &path, &claim, 1_800_000_001).unwrap();
+        let removed = compact_acknowledged_and_persist(&mut state, &path, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed.batches_removed, 1);
+        assert_eq!(removed.records_removed, 1);
+        assert_eq!(state.delivery.pending_position(), (0, 0));
+        assert_eq!(state.outbox.batches.len(), 1);
+        assert_eq!(
+            state.outbox.checkpoint.as_ref().unwrap().compacted_tip_hash,
+            hash('2')
+        );
+
+        let mut recovered = load_snapshot(&path).unwrap();
+        apply_and_persist(&mut recovered, block(103, '4', '3'), &path).unwrap();
+        assert_eq!(recovered.outbox.batches.len(), 2);
+        assert_eq!(recovered.indexer.tip(), (103, hash('4').as_str()));
+        load_snapshot(&path).unwrap();
+    }
+
+    #[test]
+    fn repeated_partial_compaction_rebases_an_active_claim_without_skipping() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        apply_and_persist(&mut state, block(102, '3', '2'), &path).unwrap();
+        apply_and_persist(&mut state, block(103, '4', '3'), &path).unwrap();
+
+        for (now, token) in [(1_800_000_000, 'a'), (1_800_000_002, 'b')] {
+            let claim = match claim_and_persist(&mut state, &path, now, 30, &hash(token)).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+            acknowledge_and_persist(&mut state, &path, &claim, now + 1).unwrap();
+        }
+        let active =
+            match claim_and_persist(&mut state, &path, 1_800_000_004, 30, &hash('c')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+
+        compact_acknowledged_and_persist(&mut state, &path, 1).unwrap();
+        assert_eq!(state.delivery.pending_position(), (1, 0));
+        compact_acknowledged_and_persist(&mut state, &path, 1).unwrap();
+        assert_eq!(state.delivery.pending_position(), (0, 0));
+        assert_eq!(state.outbox.batches.len(), 1);
+        assert_eq!(
+            acknowledge_and_persist(&mut state, &path, &active, 1_800_000_005).unwrap(),
+            ResolutionOutcome::Applied
+        );
+        assert!(matches!(
+            claim_and_persist(&mut state, &path, 1_800_000_006, 30, &hash('d')).unwrap(),
+            ClaimOutcome::Empty
+        ));
+        load_snapshot(&path).unwrap();
+    }
+
+    #[test]
+    fn persisted_checkpoint_tampering_is_detected_by_snapshot_checksum() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('a')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        acknowledge_and_persist(&mut state, &path, &claim, 1_800_000_001).unwrap();
+        compact_acknowledged_and_persist(&mut state, &path, 1).unwrap();
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        snapshot["payload"]["outbox"]["checkpoint"]["compactedTipHash"] =
+            serde_json::json!(hash('8'));
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(matches!(
+            load_snapshot(&path),
+            Err(StorageError::ChecksumMismatch)
+        ));
+    }
+
+    #[test]
+    fn compaction_never_removes_unacknowledged_or_claimed_record() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        assert!(
+            compact_acknowledged_and_persist(&mut state, &path, 1)
+                .unwrap()
+                .is_none()
+        );
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('e')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        assert!(
+            compact_acknowledged_and_persist(&mut state, &path, 1)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(state.outbox.batches.len(), 1);
+        acknowledge_and_persist(&mut state, &path, &claim, 1_800_000_001).unwrap();
+        assert!(compact_acknowledged_and_persist(&mut state, &path, 0).is_err());
+        assert_eq!(state.outbox.batches.len(), 1);
+    }
+
+    #[test]
+    fn failed_compaction_persistence_is_atomic() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let missing = directory.join("missing").join("snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+        let claim =
+            match claim_and_persist(&mut state, &path, 1_800_000_000, 30, &hash('f')).unwrap() {
+                ClaimOutcome::Claimed { claim, .. } => claim,
+                outcome => panic!("expected claim, got {outcome:?}"),
+            };
+        acknowledge_and_persist(&mut state, &path, &claim, 1_800_000_001).unwrap();
+        let before_outbox = state.outbox.clone();
+        let before_delivery = state.delivery.clone();
+        assert!(compact_acknowledged_and_persist(&mut state, &missing, 1).is_err());
+        assert_eq!(state.outbox, before_outbox);
+        assert_eq!(state.delivery, before_delivery);
+    }
+
+    #[test]
+    fn snapshot_v2_requires_explicit_migration() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        write_snapshot(&DurableState::new(indexer()), &path).unwrap();
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        snapshot["schema"] = serde_json::json!("bloch.data.indexer-snapshot.v2");
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(matches!(
+            load_snapshot(&path),
+            Err(StorageError::InvalidSnapshot("schema"))
+        ));
     }
 
     #[test]
