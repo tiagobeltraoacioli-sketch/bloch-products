@@ -267,8 +267,7 @@ fn execute_locked<C: TransitionCallbacks>(
     })?;
     let acceptance = match exchange.receipt().clone() {
         VerifiedRemoteCursorCasReceipt::Refused(refusal) => {
-            discard_prepared_state(paths.state, current_checkpoint.root(), &prepared)
-                .map_err(TransitionError::Store)?;
+            discard_prepared_state_idempotent(paths.state, current_checkpoint.root(), &prepared)?;
             journal::clear(paths.journal).map_err(TransitionError::Journal)?;
             return Ok(TransitionOutcome::Refused {
                 prepared_root: prepared,
@@ -372,12 +371,11 @@ pub fn reconcile_transition<C: TransitionCallbacks>(
                 return Err(TransitionError::RemoteConflict);
             }
             if remote.cursor() == current_cursor {
-                discard_prepared_state(
+                discard_prepared_state_idempotent(
                     paths.state,
                     current_checkpoint.root(),
                     successor_checkpoint.root(),
-                )
-                .map_err(TransitionError::Store)?;
+                )?;
                 journal::clear(paths.journal).map_err(TransitionError::Journal)?;
                 return Ok(TransitionOutcome::Refused {
                     prepared_root: successor_checkpoint.root().clone(),
@@ -413,12 +411,11 @@ pub fn reconcile_transition<C: TransitionCallbacks>(
             })?;
             match exchange.receipt().clone() {
                 VerifiedRemoteCursorCasReceipt::Refused(refusal) => {
-                    discard_prepared_state(
+                    discard_prepared_state_idempotent(
                         paths.state,
                         current_checkpoint.root(),
                         successor_checkpoint.root(),
-                    )
-                    .map_err(TransitionError::Store)?;
+                    )?;
                     journal::clear(paths.journal).map_err(TransitionError::Journal)?;
                     return Ok(TransitionOutcome::Refused {
                         prepared_root: successor_checkpoint.root().clone(),
@@ -488,6 +485,25 @@ fn coordinate<T, E: Error + Send + Sync + 'static>(
         Ok(value) => Ok(value),
         Err(CoordinatedError::Coordination(error)) => Err(TransitionError::Coordination(error)),
         Err(CoordinatedError::Operation(error)) => Err(error),
+    }
+}
+
+/// A signed refusal authorizes removal of exactly `expected_prepared`. A crash
+/// can happen after that unlink is durable but before the journal unlink is
+/// durable. Treat a missing prepared file as an already-completed discard only
+/// while the independently retained current state still matches exactly.
+fn discard_prepared_state_idempotent<E>(
+    store: &Path,
+    expected_current: &StateRoot,
+    expected_prepared: &StateRoot,
+) -> Result<(), TransitionError<E>> {
+    match discard_prepared_state(store, expected_current, expected_prepared) {
+        Ok(()) => Ok(()),
+        Err(StoreError::PreparedStateMissing) => {
+            load_state(store, expected_current).map_err(TransitionError::Store)?;
+            Ok(())
+        }
+        Err(error) => Err(TransitionError::Store(error)),
     }
 }
 

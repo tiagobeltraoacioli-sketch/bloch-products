@@ -9,6 +9,7 @@ bloch-local-state-admission = { path = "../bloch-local-state-admission" }
 bloch-local-state-coordination = { path = "../bloch-local-state-coordination" }
 bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
 bloch-local-state-remote-session = { path = "../bloch-local-state-remote-session" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
 thiserror.workspace = true
 
 [dev-dependencies]

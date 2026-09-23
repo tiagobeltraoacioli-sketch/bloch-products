@@ -49,9 +49,12 @@ It is not production/root-authenticated admission. Before every pilot check, an
 operator must compare the staged root digest and generation with the current,
 authenticated off-host record.
 
-The unit filename is retained for compatibility, but its description now calls
-it a **synthetic storage-only check**. It must not be used as a dependency of a
-production target and cannot substitute for the remote-observation,
+The former admission-named unit was replaced by the deliberately incompatible
+`bloch-products-synthetic-store-check@.service` name. Before installing this
+bundle, remove and daemon-reload any previously installed
+`bloch-products-admission@.service` only through the reviewed host change; a
+stale copy is a failed gate. The synthetic unit must not be used as a dependency
+of a production target and cannot substitute for the remote-observation,
 coordination, checkpoint and semantic admission chain described in
 `REMOTE-CURSOR-OPERATIONS.md`.
 
@@ -101,12 +104,15 @@ command that stops or restarts an existing service.
 6. After the inventory and coexistence review, create a root-owned, single-link,
    mode-0400 marker containing exactly `APPROVED_INSTANCE=INSTANCE` and one
    trailing newline.
-7. Install the unit, run `systemd-analyze verify` on it, and reload systemd.
+7. Prove `systemctl cat 'bloch-products-admission@.service'` finds no stale
+   legacy unit, install the renamed unit, run `systemd-analyze verify` on it,
+   and reload systemd. If the old unit exists, stop here and use the reviewed
+   removal/change procedure before continuing.
    `LoadCredential=` requires systemd 247 or later; an older or unrecognized
    directive rejects this plan rather than authorizing a less isolated fallback.
 8. Run the preflight directly with the same environment, then start
-   `bloch-products-admission@INSTANCE.service`. Inspect its exit status and
-   journal. A failure is a rejection; do not bypass it.
+   `bloch-products-synthetic-store-check@INSTANCE.service`. Inspect its exit
+   status and journal. A failure is a rejection; do not bypass it.
 9. Recheck all pre-existing services, listeners, memory and disk. Any regression
    rejects deployment and uses the reviewed rollback procedure.
 

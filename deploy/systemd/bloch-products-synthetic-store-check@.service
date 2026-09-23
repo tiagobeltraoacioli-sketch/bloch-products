@@ -1,5 +1,5 @@
 [Unit]
-Description=Bloch products synthetic storage-only check for %i (not authenticated admission)
+Description=Bloch products synthetic storage-only check for %i (never production admission)
 Documentation=file:/usr/share/doc/bloch-products/AUXPOW-8GB-ADMISSION.md
 After=local-fs.target
 ConditionPathIsExecutable=/usr/local/libexec/bloch-products/bloch-local-state-store

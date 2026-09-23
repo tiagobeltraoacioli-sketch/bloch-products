@@ -17,7 +17,9 @@ use bloch_local_state_remote_cursor::{
     remote_cursor_signature_message, verify_remote_cursor_cas_exchange,
     verify_remote_cursor_observation,
 };
-use bloch_local_state_store::{StateRoot, StoreError, load_state, prepare_state, write_state};
+use bloch_local_state_store::{
+    StateRoot, StoreError, discard_prepared_state, load_state, prepare_state, write_state,
+};
 use bloch_local_state_transition::{
     LocalStatePaths, TransitionCallbacks, TransitionError, TransitionOutcome, execute_transition,
     reconcile_transition,
@@ -170,6 +172,8 @@ impl Environment {
             fail_successor_fetch: false,
             return_old_after_acceptance: false,
             fail_postcheck: false,
+            sabotage_journal_after_cas: None,
+            sabotage_journal_after_postcheck: None,
             fetches: 0,
         }
     }
@@ -190,6 +194,8 @@ struct Callbacks {
     fail_successor_fetch: bool,
     return_old_after_acceptance: bool,
     fail_postcheck: bool,
+    sabotage_journal_after_cas: Option<PathBuf>,
+    sabotage_journal_after_postcheck: Option<PathBuf>,
     fetches: usize,
 }
 
@@ -327,6 +333,13 @@ impl TransitionCallbacks for Callbacks {
                 };
                 self.remote_cursor = acceptance.successor().clone();
                 self.acceptance = Some(acceptance);
+                if let Some(path) = self.sabotage_journal_after_cas.take() {
+                    std::fs::set_permissions(
+                        path,
+                        std::os::unix::fs::PermissionsExt::from_mode(0o500),
+                    )
+                    .unwrap();
+                }
                 Ok(exchange)
             }
         }
@@ -382,6 +395,10 @@ impl TransitionCallbacks for Callbacks {
             && admitted_root.generation() == 1
             && admitted_cursor.generation() == 1
         {
+            if let Some(path) = self.sabotage_journal_after_postcheck.take() {
+                std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o500))
+                    .unwrap();
+            }
             Ok(())
         } else {
             Err(TestError("restore mismatch"))
@@ -439,6 +456,38 @@ fn unknown_outcome_retains_pending_and_old_local_state() {
         )
         .unwrap(),
         pending
+    );
+}
+
+#[test]
+fn durable_journal_blocks_a_second_cas_until_reconciliation() {
+    let env = Environment::new();
+    let mut callbacks = env.callbacks(CasMode::Unknown);
+    assert!(matches!(
+        execute_transition(
+            env.paths(),
+            &env.current_checkpoint,
+            b"state-1",
+            &mut callbacks,
+        ),
+        Err(TransitionError::RemoteOutcomeUnknown(_))
+    ));
+    assert!(env.journal.join("transition.json").exists());
+
+    callbacks.mode = CasMode::Accept;
+    callbacks.fetches = 0;
+    let error = execute_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        b"state-1",
+        &mut callbacks,
+    )
+    .unwrap_err();
+    assert!(matches!(error, TransitionError::Journal(_)));
+    assert!(callbacks.acceptance.is_none());
+    assert_eq!(
+        load_state(env.state(), &env.current_root).unwrap(),
+        b"state-0"
     );
 }
 
@@ -573,6 +622,48 @@ fn accepted_then_fetch_failure_is_classified_and_recoverable() {
 }
 
 #[test]
+fn accepted_before_receipt_persistence_recovers_from_remote_successor() {
+    let env = Environment::new();
+    let mut callbacks = env.callbacks(CasMode::Accept);
+    callbacks.sabotage_journal_after_cas = Some(env.journal.clone());
+    let error = execute_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        b"state-1",
+        &mut callbacks,
+    )
+    .unwrap_err();
+    assert!(matches!(error, TransitionError::AcceptedButJournal(_)));
+    assert_eq!(
+        load_state(env.state(), &env.current_root).unwrap(),
+        b"state-0"
+    );
+
+    std::fs::set_permissions(
+        &env.journal,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    callbacks.fetches = 0;
+    let successor = callbacks.successor_checkpoint.clone().unwrap();
+    let outcome = reconcile_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        &successor,
+        &mut callbacks,
+    )
+    .unwrap();
+    let TransitionOutcome::Committed {
+        root, acceptance, ..
+    } = outcome
+    else {
+        panic!("expected recovered commit")
+    };
+    assert!(acceptance.is_none());
+    assert_eq!(load_state(env.state(), &root).unwrap(), b"state-1");
+}
+
+#[test]
 fn accepted_but_wrong_fresh_observation_keeps_pending_and_is_classified() {
     let env = Environment::new();
     let mut callbacks = env.callbacks(CasMode::Accept);
@@ -633,6 +724,107 @@ fn postcheck_crash_is_accepted_phase_and_recovery_is_idempotent() {
     };
     assert_eq!(root.generation(), 1);
     assert_eq!(load_state(env.state(), &root).unwrap(), b"state-1");
+}
+
+#[test]
+fn journal_clear_failure_after_commit_is_recoverable() {
+    let env = Environment::new();
+    let mut callbacks = env.callbacks(CasMode::Accept);
+    callbacks.sabotage_journal_after_postcheck = Some(env.journal.clone());
+    let error = execute_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        b"state-1",
+        &mut callbacks,
+    )
+    .unwrap_err();
+    assert!(matches!(error, TransitionError::AcceptedButJournal(_)));
+    let successor = callbacks.successor_checkpoint.clone().unwrap();
+    assert_eq!(
+        load_state(env.state(), successor.root()).unwrap(),
+        b"state-1"
+    );
+
+    std::fs::set_permissions(
+        &env.journal,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    callbacks.fetches = 0;
+    let outcome = reconcile_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        &successor,
+        &mut callbacks,
+    )
+    .unwrap();
+    let TransitionOutcome::Committed { root, .. } = outcome else {
+        panic!("expected recovered commit")
+    };
+    assert_eq!(load_state(env.state(), &root).unwrap(), b"state-1");
+    assert!(!env.journal.join("transition.json").exists());
+}
+
+#[test]
+fn refusal_recovery_is_idempotent_after_prepared_unlink() {
+    let env = Environment::new();
+    let mut callbacks = env.callbacks(CasMode::Unknown);
+    assert!(matches!(
+        execute_transition(
+            env.paths(),
+            &env.current_checkpoint,
+            b"state-1",
+            &mut callbacks,
+        ),
+        Err(TransitionError::RemoteOutcomeUnknown(_))
+    ));
+    let successor = callbacks.successor_checkpoint.clone().unwrap();
+
+    let journal_path = env.journal.join("transition.json");
+    let journal_bytes = std::fs::read(&journal_path).unwrap();
+    let journal_value: serde_json::Value = serde_json::from_slice(&journal_bytes).unwrap();
+    let request_bytes = hex::decode(journal_value["requestHex"].as_str().unwrap()).unwrap();
+    let request = parse_remote_cursor_cas_request(
+        &request_bytes,
+        &callbacks.remote_policy,
+        &callbacks.remote_pin,
+    )
+    .unwrap();
+    let refusal = callbacks.cas_receipt(
+        &request,
+        RemoteCursorCasDecision::Refused {
+            reason_code: "conflict".into(),
+        },
+    );
+    let original = String::from_utf8(journal_bytes).unwrap();
+    let retained = original.replace(
+        "\"receiptHex\":null",
+        &format!(
+            "\"receiptHex\":\"{}\"",
+            hex::encode(refusal.receipt_bytes())
+        ),
+    );
+    assert_ne!(retained, original);
+    std::fs::write(&journal_path, retained).unwrap();
+    discard_prepared_state(env.state(), &env.current_root, successor.root()).unwrap();
+
+    callbacks.fetches = 0;
+    let outcome = reconcile_transition(
+        env.paths(),
+        &env.current_checkpoint,
+        &successor,
+        &mut callbacks,
+    )
+    .unwrap();
+    let TransitionOutcome::Refused { refusal, .. } = outcome else {
+        panic!("expected recovered refusal")
+    };
+    assert_eq!(refusal.reason_code(), "conflict");
+    assert!(!journal_path.exists());
+    assert_eq!(
+        load_state(env.state(), &env.current_root).unwrap(),
+        b"state-0"
+    );
 }
 
 #[test]

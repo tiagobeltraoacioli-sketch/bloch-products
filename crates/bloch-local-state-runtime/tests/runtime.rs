@@ -29,6 +29,11 @@ use bloch_local_state_remote_session::FetchSessionError;
 use bloch_local_state_runtime::*;
 use bloch_local_state_store::write_state;
 use bloch_pay_adjustments::{ADJUSTMENT_STATE_SCHEMA, AdjustmentStatus};
+use bloch_trusted_time::{
+    TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
+    VerifiedTrustedTime, create_trusted_time_token, trusted_time_policy_sha256,
+    trusted_time_signature_message, verify_trusted_time_token,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -167,7 +172,10 @@ impl Fixture {
     }
 
     fn response(&self, nonce: &str) -> Vec<u8> {
-        let observed = now();
+        self.response_at(nonce, now())
+    }
+
+    fn response_at(&self, nonce: &str, observed: u64) -> Vec<u8> {
         let message = remote_cursor_signature_message(
             &self.cursor,
             &self.remote_policy,
@@ -390,6 +398,46 @@ fn happy_paths_return_only_admitted_data_and_pay_state() {
 }
 
 #[test]
+fn trusted_time_paths_admit_data_and_pay_without_operator_time() {
+    let pay = pay_fixture();
+    let (pay_time, pay_time_pin) = trusted_time(&pay.identity, &pay.remote_pin);
+    let admitted = start_pay_with_trusted_time(
+        PayStartupMaterials {
+            remote: pay.remote(Duration::from_secs(1)),
+            local: pay.local(),
+        },
+        &pay_time,
+        &pay_time_pin,
+        |request| {
+            Ok::<_, std::io::Error>(
+                pay.response_at(request.request_nonce(), pay_time.unix_seconds().unwrap()),
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.state().adjustment_id(), "adjustment-1");
+
+    let (data, lifecycle_policy) = data_fixture();
+    let (data_time, data_time_pin) = trusted_time(&data.identity, &data.remote_pin);
+    let admitted = start_data_with_trusted_time(
+        DataStartupMaterials {
+            remote: data.remote(Duration::from_secs(1)),
+            local: data.local(),
+            lifecycle_policy_bytes: &lifecycle_policy,
+        },
+        &data_time,
+        &data_time_pin,
+        |request| {
+            Ok::<_, std::io::Error>(
+                data.response_at(request.request_nonce(), data_time.unix_seconds().unwrap()),
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.state().sequence(), 0);
+}
+
+#[test]
 fn timeout_replay_and_cross_identity_fail_closed() {
     let fixture = pay_fixture();
     let timeout = start_pay(
@@ -487,6 +535,34 @@ fn local_lock_is_acquired_before_remote_fetch() {
     .unwrap();
 }
 
+#[test]
+fn trusted_time_path_acquires_local_lock_before_remote_fetch() {
+    let fixture = pay_fixture();
+    let (trusted_time, trusted_time_pin) = trusted_time(&fixture.identity, &fixture.remote_pin);
+    let transported = Cell::new(false);
+    with_coordinated_state_transition(&fixture.coordination.0, |_scope| {
+        let result = start_pay_with_trusted_time(
+            PayStartupMaterials {
+                remote: fixture.remote(Duration::from_secs(1)),
+                local: fixture.local(),
+            },
+            &trusted_time,
+            &trusted_time_pin,
+            |request| {
+                transported.set(true);
+                Ok::<_, std::io::Error>(fixture.response(request.request_nonce()))
+            },
+        );
+        assert!(!transported.get());
+        assert!(matches!(
+            result,
+            Err(StartupRuntimeError::Coordination(CoordinationError::Busy))
+        ));
+        Ok::<_, std::io::Error>(())
+    })
+    .unwrap();
+}
+
 fn authorities(keys: &[SigningKey], prefix: &str) -> Vec<CheckpointAuthority> {
     keys.iter()
         .enumerate()
@@ -514,6 +590,54 @@ fn signatures(
 fn digest(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
+
+fn trusted_time(
+    state_identity: &str,
+    remote_cursor_policy_sha256: &str,
+) -> (VerifiedTrustedTime, String) {
+    let now = now();
+    let nonce = "runtime_trusted_time_nonce_0123456789abcdef0123456789abcdef";
+    let keys = [
+        SigningKey::from_bytes(&[111; 32]),
+        SigningKey::from_bytes(&[112; 32]),
+    ];
+    let policy = TrustedTimePolicy {
+        schema: TRUSTED_TIME_POLICY_SCHEMA.into(),
+        policy_id: "runtime-trusted-time".into(),
+        signature_domain: "bloch-products-runtime-time".into(),
+        state_identity: state_identity.into(),
+        remote_cursor_policy_sha256: remote_cursor_policy_sha256.into(),
+        threshold: 2,
+        effective_at_unix_seconds: now - 60,
+        expires_at_unix_seconds: now + 60,
+        max_token_lifetime_seconds: 30,
+        authorities: keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| TrustedTimeAuthority {
+                authority_id: format!("time-{}", index + 1),
+                ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().as_bytes())),
+            })
+            .collect(),
+    };
+    let pin = trusted_time_policy_sha256(&policy).unwrap();
+    let message = trusted_time_signature_message(&policy, &pin, nonce, now, now + 30).unwrap();
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| TrustedTimeSignature {
+            authority_id: format!("time-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let token =
+        create_trusted_time_token(&policy, &pin, nonce, now, now + 30, &signatures).unwrap();
+    (
+        verify_trusted_time_token(&token, &policy, &pin, nonce, None).unwrap(),
+        pin,
+    )
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

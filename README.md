@@ -116,7 +116,13 @@ identity, prove finality, activate a network, or authorize asset movement.
   independence remain external gates.
 - `bloch-local-state-remote-session`: transport-neutral one-shot fetch session
   with an in-memory CSPRNG nonce, monotonic deadline, current-time freshness and
-  an opaque verified cursor result. It supplies no network transport itself.
+  bounded incremental ingress plus an opaque verified cursor result. It
+  supplies no network transport itself.
+- `bloch-trusted-time`: canonical nonce-bound threshold Ed25519 time intervals,
+  independently pinned and audience-bound to one state identity and remote
+  cursor policy, returned as an opaque monotonic capability. Fetching,
+  rollback-resistant boundary storage and host suspend qualification remain
+  external gates.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   the one-shot remote session to coordinated checkpoint, cursor, store and
   semantic admission without materializing a raw cursor or nonce file.

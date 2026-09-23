@@ -25,8 +25,9 @@ remote cursor already fixes its exact policy and artifact digests.
 1. Generate a new unpredictable request nonce. Never persist it for reuse.
 2. Fetch an observation over the separately authenticated transport.
 3. Verify canonical encoding, the independent policy pin, requested nonce,
-   trusted signature threshold, state identity and freshness against a trusted
-   clock.
+   trusted signature threshold, state identity and freshness against a
+   separately pinned trusted-time capability bound to that identity and remote
+   policy.
 4. Materialize the verified canonical cursor only in an owner-private
    short-lived runtime directory such as `/run`; never use a persistent stale
    cache as a fallback.

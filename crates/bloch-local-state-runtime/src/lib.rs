@@ -9,7 +9,9 @@ use bloch_local_state_coordination::{
 };
 use bloch_local_state_remote_session::{
     FetchSessionError, RemoteCursorFetchRequest, fetch_verified_remote_cursor,
+    fetch_verified_remote_cursor_with_trusted_time,
 };
+use bloch_trusted_time::VerifiedTrustedTime;
 use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
@@ -56,6 +58,8 @@ enum StartupOperationError<E> {
     Admission(AdmissionError),
 }
 
+/// Compatibility-only startup using the host wall clock for remote freshness.
+/// Use [`start_data_with_trusted_time`] for the qualified trusted-time path.
 pub fn start_data<E, F>(
     materials: DataStartupMaterials<'_>,
     transport: F,
@@ -76,6 +80,37 @@ where
     map_coordinated(result)
 }
 
+/// Starts Bloch Data while holding the local lock and verifies remote
+/// freshness with a threshold-authenticated, monotonic time capability.
+pub fn start_data_with_trusted_time<E, F>(
+    materials: DataStartupMaterials<'_>,
+    trusted_time: &VerifiedTrustedTime,
+    expected_trusted_time_policy_sha256: &str,
+    transport: F,
+) -> Result<AdmittedLifecycleState, StartupRuntimeError<E>>
+where
+    F: for<'session> FnOnce(RemoteCursorFetchRequest<'session>) -> Result<Vec<u8>, E>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            trusted_time,
+            expected_trusted_time_policy_sha256,
+            transport,
+        )
+        .map_err(StartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_data_lifecycle(DataLifecycleAdmission {
+            startup,
+            lifecycle_policy_bytes: materials.lifecycle_policy_bytes,
+        })
+        .map_err(StartupOperationError::Admission)
+    });
+    map_coordinated(result)
+}
+
+/// Compatibility-only startup using the host wall clock for remote freshness.
+/// Use [`start_pay_with_trusted_time`] for the qualified trusted-time path.
 pub fn start_pay<E, F>(
     materials: PayStartupMaterials<'_>,
     transport: F,
@@ -86,6 +121,32 @@ where
     let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
         let verified_remote =
             fetch(&materials.remote, transport).map_err(StartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_pay_adjustment(PayAdjustmentAdmission { startup })
+            .map_err(StartupOperationError::Admission)
+    });
+    map_coordinated(result)
+}
+
+/// Starts Bloch Pay while holding the local lock and verifies remote
+/// freshness with a threshold-authenticated, monotonic time capability.
+pub fn start_pay_with_trusted_time<E, F>(
+    materials: PayStartupMaterials<'_>,
+    trusted_time: &VerifiedTrustedTime,
+    expected_trusted_time_policy_sha256: &str,
+    transport: F,
+) -> Result<AdmittedAdjustmentState, StartupRuntimeError<E>>
+where
+    F: for<'session> FnOnce(RemoteCursorFetchRequest<'session>) -> Result<Vec<u8>, E>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            trusted_time,
+            expected_trusted_time_policy_sha256,
+            transport,
+        )
+        .map_err(StartupOperationError::Remote)?;
         let startup = startup(&materials.local, &verified_remote);
         admit_pay_adjustment(PayAdjustmentAdmission { startup })
             .map_err(StartupOperationError::Admission)
@@ -105,6 +166,26 @@ where
         materials.expected_policy_sha256,
         materials.expected_state_identity,
         materials.timeout,
+        transport,
+    )
+}
+
+fn fetch_with_trusted_time<E, F>(
+    materials: &RemoteFetchMaterials<'_>,
+    trusted_time: &VerifiedTrustedTime,
+    expected_trusted_time_policy_sha256: &str,
+    transport: F,
+) -> Result<bloch_local_state_remote_cursor::VerifiedRemoteCursor, FetchSessionError<E>>
+where
+    F: for<'session> FnOnce(RemoteCursorFetchRequest<'session>) -> Result<Vec<u8>, E>,
+{
+    fetch_verified_remote_cursor_with_trusted_time(
+        materials.policy_bytes,
+        materials.expected_policy_sha256,
+        materials.expected_state_identity,
+        materials.timeout,
+        trusted_time,
+        expected_trusted_time_policy_sha256,
         transport,
     )
 }

@@ -21,6 +21,7 @@ members = [
   "crates/bloch-local-state-remote-cursor",
   "crates/bloch-local-state-remote-cursor-control-plane",
   "crates/bloch-local-state-remote-session",
+  "crates/bloch-trusted-time",
   "crates/bloch-local-state-runtime",
   "crates/bloch-local-state-transition",
   "crates/bloch-local-state-coordination",

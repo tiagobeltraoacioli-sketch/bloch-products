@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-trusted-time = { path = "../bloch-trusted-time" }
 getrandom = "0.2.17"
 hex.workspace = true
 thiserror.workspace = true

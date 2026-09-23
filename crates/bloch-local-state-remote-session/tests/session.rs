@@ -5,7 +5,13 @@ use bloch_local_state_remote_cursor::{
     remote_cursor_policy_sha256, remote_cursor_signature_message,
 };
 use bloch_local_state_remote_session::{
-    FetchSessionError, RemoteCursorFetchRequest, fetch_verified_remote_cursor,
+    BoundedIngressError, FetchSessionError, MAX_INGRESS_READ_CHUNK_BYTES, RemoteCursorFetchRequest,
+    fetch_verified_remote_cursor, fetch_verified_remote_cursor_with_trusted_time,
+};
+use bloch_trusted_time::{
+    TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
+    create_trusted_time_token, trusted_time_policy_sha256, trusted_time_signature_message,
+    verify_trusted_time_token,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use std::cell::Cell;
@@ -142,6 +148,140 @@ fn returns_only_a_current_verified_cursor() {
 }
 
 #[test]
+fn trusted_time_capability_drives_freshness_without_an_operator_time_argument() {
+    let fixture = Fixture::new(30);
+    let keys = [
+        SigningKey::from_bytes(&[101; 32]),
+        SigningKey::from_bytes(&[102; 32]),
+    ];
+    let policy = TrustedTimePolicy {
+        schema: TRUSTED_TIME_POLICY_SCHEMA.into(),
+        policy_id: "session-trusted-time".into(),
+        signature_domain: "bloch-products-session-trusted-time".into(),
+        state_identity: fixture.cursor.state_identity().into(),
+        remote_cursor_policy_sha256: fixture.policy_pin.clone(),
+        threshold: 2,
+        effective_at_unix_seconds: fixture.now - 60,
+        expires_at_unix_seconds: fixture.now + 60,
+        max_token_lifetime_seconds: 30,
+        authorities: keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| TrustedTimeAuthority {
+                authority_id: format!("time-authority-{}", index + 1),
+                ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().as_bytes())),
+            })
+            .collect(),
+    };
+    let pin = trusted_time_policy_sha256(&policy).unwrap();
+    let time_nonce = "trusted_time_session_nonce_0123456789abcdef0123456789abcdef";
+    let message =
+        trusted_time_signature_message(&policy, &pin, time_nonce, fixture.now, fixture.now + 30)
+            .unwrap();
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| TrustedTimeSignature {
+            authority_id: format!("time-authority-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let token = create_trusted_time_token(
+        &policy,
+        &pin,
+        time_nonce,
+        fixture.now,
+        fixture.now + 30,
+        &signatures,
+    )
+    .unwrap();
+    let trusted_time = verify_trusted_time_token(&token, &policy, &pin, time_nonce, None).unwrap();
+
+    let verified = fetch_verified_remote_cursor_with_trusted_time(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        &trusted_time,
+        &pin,
+        |request| {
+            Ok::<_, std::io::Error>(fixture.observation(request.request_nonce(), fixture.now))
+        },
+    )
+    .unwrap();
+    assert_eq!(verified.cursor(), &fixture.cursor);
+
+    let called = Cell::new(false);
+    let wrong_pin = format!("0x{}", "00".repeat(32));
+    let cross_policy = fetch_verified_remote_cursor_with_trusted_time(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        &trusted_time,
+        &wrong_pin,
+        |_request| {
+            called.set(true);
+            Ok::<_, std::io::Error>(Vec::new())
+        },
+    );
+    assert!(matches!(
+        cross_policy,
+        Err(FetchSessionError::TrustedTimeContextMismatch)
+    ));
+    assert!(!called.get());
+
+    let mut other_policy = policy.clone();
+    other_policy.state_identity = "pay:merchant-a:adjustment-1".into();
+    let other_pin = trusted_time_policy_sha256(&other_policy).unwrap();
+    let other_message = trusted_time_signature_message(
+        &other_policy,
+        &other_pin,
+        time_nonce,
+        fixture.now,
+        fixture.now + 30,
+    )
+    .unwrap();
+    let other_signatures = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| TrustedTimeSignature {
+            authority_id: format!("time-authority-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&other_message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let other_token = create_trusted_time_token(
+        &other_policy,
+        &other_pin,
+        time_nonce,
+        fixture.now,
+        fixture.now + 30,
+        &other_signatures,
+    )
+    .unwrap();
+    let other_time =
+        verify_trusted_time_token(&other_token, &other_policy, &other_pin, time_nonce, None)
+            .unwrap();
+    let cross_audience = fetch_verified_remote_cursor_with_trusted_time(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        &other_time,
+        &other_pin,
+        |_request| {
+            called.set(true);
+            Ok::<_, std::io::Error>(Vec::new())
+        },
+    );
+    assert!(matches!(
+        cross_audience,
+        Err(FetchSessionError::TrustedTimeContextMismatch)
+    ));
+    assert!(!called.get());
+}
+
+#[test]
 fn timeout_is_rejected_using_monotonic_deadline() {
     let fixture = Fixture::new(30);
     let result = fetch_verified_remote_cursor(
@@ -244,4 +384,178 @@ fn oversized_response_and_zero_timeout_fail_before_authentication() {
         Err(FetchSessionError::InvalidConfiguration)
     ));
     assert!(!called.get());
+}
+
+#[test]
+fn bounded_ingress_incrementally_reads_a_valid_authenticated_response() {
+    let fixture = Fixture::new(30);
+    let largest_requested = Cell::new(0_usize);
+    let result = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        |request| {
+            let response = fixture.observation(request.request_nonce(), fixture.now);
+            let mut offset = 0_usize;
+            let expected_deadline = request.deadline();
+            let mut ingress = |buffer: &mut [u8], deadline| {
+                assert_eq!(deadline, expected_deadline);
+                largest_requested.set(largest_requested.get().max(buffer.len()));
+                let available = response.len() - offset;
+                let copied = available.min(buffer.len()).min(17);
+                buffer[..copied].copy_from_slice(&response[offset..offset + copied]);
+                offset += copied;
+                Ok::<_, std::io::Error>(copied)
+            };
+            request.read_bounded_response(&mut ingress)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.cursor(), &fixture.cursor);
+    assert!(largest_requested.get() <= MAX_INGRESS_READ_CHUNK_BYTES);
+}
+
+#[test]
+fn bounded_ingress_detects_an_unbounded_virtual_stream_without_growing_past_limit() {
+    let fixture = Fixture::new(30);
+    let bytes_returned = Cell::new(0_usize);
+    let largest_requested = Cell::new(0_usize);
+    let result = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        |request| {
+            let limit = request.maximum_response_bytes();
+            let mut ingress = |buffer: &mut [u8], _deadline| {
+                largest_requested.set(largest_requested.get().max(buffer.len()));
+                buffer.fill(0x5a);
+                bytes_returned.set(bytes_returned.get() + buffer.len());
+                Ok::<_, std::io::Error>(buffer.len())
+            };
+            let result = request.read_bounded_response(&mut ingress);
+            assert_eq!(bytes_returned.get(), limit + 1);
+            result
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(FetchSessionError::Transport(
+            BoundedIngressError::ResponseTooLarge
+        ))
+    ));
+    assert_eq!(largest_requested.get(), MAX_INGRESS_READ_CHUNK_BYTES);
+
+    let exact_limit = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        |request| {
+            let limit = request.maximum_response_bytes();
+            let mut emitted = 0_usize;
+            let mut ingress = |buffer: &mut [u8], _deadline| {
+                let copied = (limit - emitted).min(buffer.len());
+                buffer[..copied].fill(0x5a);
+                emitted += copied;
+                Ok::<_, std::io::Error>(copied)
+            };
+            request.read_bounded_response(&mut ingress)
+        },
+    );
+    assert!(matches!(
+        exact_limit,
+        Err(FetchSessionError::Authentication(_))
+    ));
+}
+
+#[test]
+fn bounded_ingress_rejects_a_reader_that_returns_after_the_deadline() {
+    let fixture = Fixture::new(30);
+    let result = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_millis(5),
+        |request| {
+            let mut ingress = |buffer: &mut [u8], _deadline| {
+                std::thread::sleep(Duration::from_millis(20));
+                buffer[0] = b'{';
+                Ok::<_, std::io::Error>(1)
+            };
+            request.read_bounded_response(&mut ingress)
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(FetchSessionError::Transport(
+            BoundedIngressError::DeadlineExceeded
+        ))
+    ));
+
+    let late_error = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_millis(5),
+        |request| {
+            let mut ingress = |_buffer: &mut [u8], _deadline| {
+                std::thread::sleep(Duration::from_millis(20));
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "late transport timeout",
+                ))
+            };
+            request.read_bounded_response(&mut ingress)
+        },
+    );
+    assert!(matches!(
+        late_error,
+        Err(FetchSessionError::Transport(
+            BoundedIngressError::DeadlineExceeded
+        ))
+    ));
+}
+
+#[test]
+fn bounded_ingress_rejects_empty_and_contract_violating_readers() {
+    let fixture = Fixture::new(30);
+    let empty = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        |request| {
+            let mut ingress = |_buffer: &mut [u8], _deadline| Ok::<_, std::io::Error>(0);
+            request.read_bounded_response(&mut ingress)
+        },
+    );
+    assert!(matches!(
+        empty,
+        Err(FetchSessionError::Transport(
+            BoundedIngressError::EmptyResponse
+        ))
+    ));
+
+    let invalid_count = fetch_verified_remote_cursor(
+        &fixture.policy_bytes,
+        &fixture.policy_pin,
+        fixture.cursor.state_identity(),
+        Duration::from_secs(1),
+        |request| {
+            let mut ingress =
+                |buffer: &mut [u8], _deadline| Ok::<_, std::io::Error>(buffer.len() + 1);
+            request.read_bounded_response(&mut ingress)
+        },
+    );
+    assert!(matches!(
+        invalid_count,
+        Err(FetchSessionError::Transport(
+            BoundedIngressError::InvalidReadCount
+        ))
+    ));
 }

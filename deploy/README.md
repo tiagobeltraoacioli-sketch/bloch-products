@@ -22,8 +22,9 @@ for the reviewed installation plan.
 
 Files:
 
-- `systemd/bloch-products-admission@.service`: legacy-named synthetic
-  storage-check oneshot; it is not a production admission unit.
+- `systemd/bloch-products-synthetic-store-check@.service`: explicitly named
+  synthetic storage-check oneshot; it is not a production admission unit and
+  has no install relationship to any production target.
 - `systemd/bloch-products.tmpfiles.conf`: optional directory declarations;
   review before using and never apply blindly on an occupied host. It includes
   isolated `state`, `cursor` and boot-scoped `coord` paths for the future
@@ -34,6 +35,9 @@ Files:
 - `preflight.sh`: read-only host and file admission checks.
 - `credential-preflight.sh`: checks the staged credential metadata as the
   unprivileged product user without printing its contents.
+- `verify-unit-separation.sh`: static negative check that the synthetic unit is
+  not legacy-named, installable, aliased or referenced by another bundled
+  systemd unit.
 
 This synthetic-pilot bundle does not yet authenticate the staged root through
 `bloch-local-state-checkpoint` or a remote monotonic cursor. It provides no

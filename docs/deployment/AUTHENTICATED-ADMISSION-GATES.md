@@ -5,15 +5,19 @@
 This is a production-gate specification, not deployment evidence. The remote
 cursor protocol, memory-only fetch session, local coordination, semantic
 admission, transition/recovery composition, single-host CAS reference core and
-re-bootstrap tools exist as building blocks. A qualified network transport,
-replicated remote service, authority signing boundary and production systemd
-composition are not deployed or qualified.
+re-bootstrap tools exist as building blocks. Audience-bound threshold trusted
+time and bounded incremental ingress also exist. A qualified network transport,
+rollback-resistant time-boundary store, replicated remote service, authority
+signing boundary and production systemd composition are not deployed or
+qualified.
 
-The existing `bloch-products-admission@.service` is **synthetic-only**. It checks
-a locally staged root with the generic store verifier. It does not authenticate
+The existing `bloch-products-synthetic-store-check@.service` is
+**synthetic-only**. It checks a locally staged root with the generic store
+verifier. It does not authenticate
 a remote cursor observation, prove freshness, coordinate a writer or perform
-Bloch Data/Bloch Pay semantic restoration. It must be renamed or excluded from
-every production target and must never be treated as satisfying these gates.
+Bloch Data/Bloch Pay semantic restoration. It has no install relationship and
+must remain excluded from every production target; it never satisfies these
+gates.
 
 ## Fixed host layout
 
@@ -47,7 +51,15 @@ coordination -> cursor -> state
 Advisory locks do not constrain code running as the same UID that ignores the
 protocol. Dedicated UIDs are therefore part of the security boundary.
 
-## Two-unit architecture
+## Proposed split-unit architecture
+
+This section is a deployment design, not an implemented unit chain. The
+current `bloch-local-state-runtime` keeps nonce generation, fetch verification
+and admission in one process while holding the local lock; it does not by
+itself satisfy the separate fetch/product UID and network-isolation model
+below. Production qualification must select and test one complete composition
+without reducing nonce, trusted-time or policy provenance to an unauthenticated
+raw cursor.
 
 ### 1. Networked fetch unit
 
@@ -106,11 +118,19 @@ not production inputs.
 | `fetch-invocation` | Data and Pay | Future fetch-client gate; current admission CLI does not consume it |
 | `remote-policy` | Data and Pay | Reviewed trust ceremony |
 | `remote-policy-pin` | Data and Pay | Separate authenticated release/control record |
+| `trusted-time-token` | Data and Pay | Fresh nonce-bound threshold-signed interval for the exact state and remote policy |
+| `trusted-time-request-nonce` | Data and Pay | Fresh CSPRNG nonce for the same time-token acquisition |
+| `trusted-time-policy` | Data and Pay | Reviewed time-authority ceremony, audience-bound to state and remote policy |
+| `trusted-time-policy-pin` | Data and Pay | Separate authenticated release/control record |
 | `checkpoint-artifact` | Data and Pay | Exact artifact referenced by observed cursor |
 | `checkpoint-policy` | Data and Pay | Exact policy referenced by observed cursor |
 | `semantic-manifest` | Data and Pay | Exact digest referenced by observed cursor/checkpoint |
 | `lifecycle-policy` | Data only | Exact digest referenced by Data semantic manifest |
 | `expected-state-identity` | Data and Pay | Fixed instance/tenant deployment record |
+
+The current systemd-mode admission CLI does not consume the four trusted-time
+credentials and is therefore not this production composition. The names above
+reserve the exact reviewed interface for a future qualified unit.
 
 Credentials must be bounded, regular, single-link systemd credential objects
 with the reviewed root ownership/mode for the deployed systemd version. Exact
@@ -197,13 +217,13 @@ require a separate authority-approved recovery or re-genesis ceremony.
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
 | P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition and negative tests exist; qualified transport/systemd integration evidence remains |
-| P0 | Trusted time cannot be supplied by operator argument | **Open** | Qualified clock design, skew limits and rollback tests |
+| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Audience-bound threshold capability exists; fresh acquisition, rollback-resistant boundary storage, suspend/resume qualification and host tests remain |
 | P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core and concurrency tests exist; replicated service, external signing and operational qualification remain |
-| P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition exists; complete crash-injection and target-host evidence remain |
-| P0 | Legacy synthetic unit cannot satisfy production target | **Open** | Renamed/isolated unit and target-level negative test |
+| P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
+| P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed and has no install relationship; target-level negative test remains |
 | P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations exist; host manifest, unit verification and ownership checks remain |
 | P1 | Exact credential names and provenance | **Partial** | Fixed CLI credential names exist; systemd integration tests and arbitrary-name rejection remain |
-| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session tests exist; repeated-start, reboot and transport-failure evidence remain |
+| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session and bounded-ingress tests exist; qualified adapter, repeated-start, reboot and transport-failure evidence remain |
 | P1 | Explicit Data/Pay state-identity mapping | **Partial** | Library cross-identity tests exist; deployed cross-product/cross-tenant evidence remains |
 | P1 | Re-bootstrap maintenance and installation runbook | **Partial** | Fencing/install drill and independently retained evidence |
 
@@ -239,7 +259,7 @@ Run these tests on the target Linux/systemd version, not only in unit tests:
 10. Verify admission has no network, emits no state/credential data to stdout or
     journal, stays within CPU/memory/task/file limits and leaves AuxPoW, k3s,
     pool/proxy and G4 services unchanged.
-11. Prove the legacy synthetic unit cannot start, satisfy, alias or be depended
+11. Prove the synthetic unit cannot satisfy, alias or be depended
     upon by the production admission target.
 12. Exercise the re-bootstrap refusal cases and an offline fenced recovery drill
     without deriving either cursor pin from the recovered host.

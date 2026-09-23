@@ -300,6 +300,7 @@ version = "0.1.0"
 dependencies = [
  "bloch-local-state-cursor",
  "bloch-local-state-remote-cursor",
+ "bloch-trusted-time",
  "ed25519-dalek",
  "getrandom",
  "hex",
@@ -319,6 +320,7 @@ dependencies = [
  "bloch-local-state-remote-session",
  "bloch-local-state-store",
  "bloch-pay-adjustments",
+ "bloch-trusted-time",
  "ed25519-dalek",
  "hex",
  "serde",
@@ -388,6 +390,18 @@ dependencies = [
 
 [[package]]
 name = "bloch-pay-reconciliation"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-trusted-time"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
