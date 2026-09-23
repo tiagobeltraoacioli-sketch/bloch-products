@@ -432,7 +432,7 @@ fn validate_named_file(
     }
     let status = unsafe { status.assume_init() };
     if status.st_mode & libc::S_IFMT != libc::S_IFREG
-        || u128::try_from(status.st_dev).ok() != Some(u128::from(metadata.dev()))
+        || status.st_dev as u128 != u128::from(metadata.dev())
         || u128::from(status.st_ino) != u128::from(metadata.ino())
         || status.st_nlink != 1
         || status.st_mode & 0o077 != 0
