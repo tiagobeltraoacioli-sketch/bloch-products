@@ -247,6 +247,14 @@ fn validate_network(network: &ChainIdentity) -> Result<(), IndexerError> {
     Ok(())
 }
 
+/// Validates the canonical chain identity without constructing indexer state.
+///
+/// Transport and audit adapters should reuse this boundary instead of
+/// maintaining a second, potentially divergent network validator.
+pub fn validate_chain_identity(network: &ChainIdentity) -> Result<(), IndexerError> {
+    validate_network(network)
+}
+
 fn validate_anchor(anchor: &BlockAnchor) -> Result<(), IndexerError> {
     if !valid_hash(&anchor.block_hash, true) || !valid_hash(&anchor.state_root, true) {
         return Err(IndexerError::InvalidConfiguration("anchor"));

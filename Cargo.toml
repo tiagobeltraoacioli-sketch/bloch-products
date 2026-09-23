@@ -1,6 +1,8 @@
 [workspace]
 members = [
+  "crates/bloch-indexer-audit",
   "crates/bloch-indexer-core",
+  "crates/bloch-indexer-delivery-protocol",
   "crates/bloch-indexer-input",
   "crates/bloch-indexer-protocol",
   "crates/bloch-indexer-query",

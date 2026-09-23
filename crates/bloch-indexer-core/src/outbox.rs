@@ -72,7 +72,7 @@ impl OutboxQueue {
         let mut queue_network = None;
         let mut expected_previous_tip: Option<&str> = None;
         if let Some(checkpoint) = &self.checkpoint {
-            validate_checkpoint(checkpoint)?;
+            validate_outbox_checkpoint(checkpoint)?;
             queue_network = Some(&checkpoint.network);
             expected_previous_tip = Some(checkpoint.compacted_tip_hash.as_str());
             transitions.extend(
@@ -316,7 +316,8 @@ pub enum OutboxError {
     InvalidCompaction(&'static str),
 }
 
-fn validate_checkpoint(checkpoint: &OutboxCheckpoint) -> Result<(), OutboxError> {
+/// Revalidates a compacted checkpoint and its complete transition hash chain.
+pub fn validate_outbox_checkpoint(checkpoint: &OutboxCheckpoint) -> Result<(), OutboxError> {
     validate_network(&checkpoint.network)
         .map_err(|_| OutboxError::InvalidQueue("checkpointNetwork"))?;
     if checkpoint.schema != OUTBOX_CHECKPOINT_SCHEMA
@@ -488,16 +489,11 @@ pub fn validate_batch(batch: &OutboxBatch) -> Result<(), OutboxError> {
     for (position, record) in batch.records.iter().enumerate() {
         let expected_position =
             u32::try_from(position).map_err(|_| OutboxError::InvalidBatch("position"))?;
-        if record.schema != OUTBOX_RECORD_SCHEMA
+        if validate_outbox_record(record).is_err()
             || record.transition_id != batch.transition_id
             || record.position != expected_position
             || record.network != *network
-            || record.height == 0
-            || !valid_hash(&record.block_hash, true)
-            || !valid_hash(&record.parent_hash, false)
-            || record.block_hash == record.parent_hash
             || !record_ids.insert(record.id.as_str())
-            || record.id != record_id(record)
         {
             return Err(OutboxError::InvalidBatch("record"));
         }
@@ -539,6 +535,26 @@ pub fn validate_batch(batch: &OutboxBatch) -> Result<(), OutboxError> {
     );
     if batch.transition_id != expected_transition {
         return Err(OutboxError::InvalidBatch("transitionId"));
+    }
+    Ok(())
+}
+
+/// Revalidates one serialized delivery record, including its deterministic ID.
+///
+/// This does not prove membership in a particular batch; callers needing that
+/// guarantee must validate the containing [`OutboxBatch`] with [`validate_batch`].
+pub fn validate_outbox_record(record: &OutboxRecord) -> Result<(), OutboxError> {
+    validate_network(&record.network).map_err(|_| OutboxError::InvalidBatch("recordNetwork"))?;
+    if record.schema != OUTBOX_RECORD_SCHEMA
+        || !valid_hash(&record.transition_id, true)
+        || record.height == 0
+        || !valid_hash(&record.block_hash, true)
+        || !valid_hash(&record.parent_hash, false)
+        || record.block_hash == record.parent_hash
+        || !valid_hash(&record.id, true)
+        || record.id != record_id(record)
+    {
+        return Err(OutboxError::InvalidBatch("record"));
     }
     Ok(())
 }

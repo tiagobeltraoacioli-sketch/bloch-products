@@ -17,11 +17,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const SNAPSHOT_SCHEMA: &str = "bloch.data.indexer-snapshot.v3";
 const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_COMPACTION_BATCHES_PER_CALL: usize = 10_000;
+const DEFAULT_LOCK_WAIT: Duration = Duration::from_secs(5);
+const MAX_LOCK_WAIT: Duration = Duration::from_secs(30);
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 static TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
@@ -44,6 +48,68 @@ pub enum StorageError {
     Delivery(#[from] DeliveryError),
     #[error("invalid outbox compaction request: {0}")]
     InvalidCompaction(&'static str),
+    #[error("snapshot is locked by another writer")]
+    LockBusy,
+    #[error("timed out waiting for the snapshot writer lock")]
+    LockTimeout,
+    #[error("invalid snapshot lock request: {0}")]
+    InvalidLock(&'static str),
+    #[error("safe snapshot writer locking is unsupported on this platform")]
+    LockUnsupported,
+}
+
+/// Exclusive, process-wide writer coordination for one snapshot path.
+///
+/// This is an advisory local-filesystem lock. It prevents cooperating
+/// processes from mutating the snapshot concurrently; it is not a distributed
+/// lock and does not provide multi-host or HA coordination.
+#[cfg(unix)]
+pub struct SnapshotWriterLock {
+    file: File,
+    parent: File,
+    name: std::ffi::CString,
+}
+
+#[cfg(not(unix))]
+pub struct SnapshotWriterLock;
+
+impl SnapshotWriterLock {
+    /// Acquires the writer lock, waiting no longer than `maximum_wait`.
+    /// A zero duration performs exactly one nonblocking attempt.
+    pub fn acquire(path: &Path, maximum_wait: Duration) -> Result<Self, StorageError> {
+        if maximum_wait > MAX_LOCK_WAIT {
+            return Err(StorageError::InvalidLock("maximumWait"));
+        }
+        #[cfg(unix)]
+        return acquire_writer_lock_unix(path, maximum_wait);
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            let _ = maximum_wait;
+            Err(StorageError::LockUnsupported)
+        }
+    }
+
+    #[cfg(unix)]
+    fn verify_path(&self) -> Result<(), StorageError> {
+        verify_lock_path(&self.parent, &self.name, &self.file)
+    }
+
+    #[cfg(not(unix))]
+    fn verify_path(&self) -> Result<(), StorageError> {
+        Err(StorageError::LockUnsupported)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SnapshotWriterLock {
+    fn drop(&mut self) {
+        // SAFETY: `file` remains a valid descriptor for this call. Closing the
+        // descriptor would also release flock; an explicit unlock is clearer.
+        unsafe {
+            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,8 +149,25 @@ struct SnapshotPayload {
     delivery: OutboxDelivery,
 }
 
-/// Atomically persists the complete canonical and collision-detection state.
+/// Atomically initializes a snapshot while excluding cooperating writers.
+///
+/// This operation is create-once: an existing snapshot, including a corrupt
+/// one, is never overwritten from caller-held state. Runtime transitions must
+/// use the `*_and_persist` APIs below; they reload the latest snapshot under
+/// the same lock before mutation.
 pub fn write_snapshot(state: &DurableState, path: &Path) -> Result<(), StorageError> {
+    let writer_lock = SnapshotWriterLock::acquire(path, DEFAULT_LOCK_WAIT)?;
+    writer_lock.verify_path()?;
+    match load_snapshot(path) {
+        Err(StorageError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_snapshot_unlocked(state, path)
+        }
+        Err(error) => Err(error),
+        Ok(_) => Err(StorageError::InvalidSnapshot("alreadyInitialized")),
+    }
+}
+
+fn write_snapshot_unlocked(state: &DurableState, path: &Path) -> Result<(), StorageError> {
     validate_durable_state(state)?;
     let indexer = &state.indexer;
     let payload = SnapshotPayload {
@@ -125,40 +208,41 @@ pub fn load_snapshot(path: &Path) -> Result<DurableState, StorageError> {
     restore(snapshot.payload)
 }
 
-/// Applies and persists as one durable transition. In-memory state changes only
-/// after the replacement snapshot has been fsynced and renamed successfully.
+/// Applies and persists as one durable transition. The current snapshot is
+/// reloaded under the writer lock first, so a stale in-memory caller cannot
+/// overwrite a newer cooperating process. In-memory state changes only after
+/// the replacement snapshot has been fsynced and renamed successfully.
 pub fn apply_and_persist(
     state: &mut DurableState,
     block: CanonicalBlock,
     path: &Path,
 ) -> Result<ApplyOutcome, StorageError> {
-    let mut candidate = state.clone();
-    let previous_tip_hash = candidate.indexer.tip().1.to_owned();
-    let removed_blocks = if block.height <= candidate.indexer.tip().0 {
-        candidate
-            .indexer
-            .blocks
-            .range(block.height..)
-            .rev()
-            .map(|(_, block)| block.clone())
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let outcome = candidate.indexer.apply(block.clone())?;
-    if matches!(outcome, ApplyOutcome::Idempotent { .. }) {
-        return Ok(outcome);
-    }
-    let batch = build_outbox(
-        &candidate.indexer.network,
-        &previous_tip_hash,
-        &block,
-        &removed_blocks,
-    )?;
-    candidate.outbox.enqueue(batch)?;
-    write_snapshot(&candidate, path)?;
-    *state = candidate;
-    Ok(outcome)
+    update_under_writer_lock(state, path, |candidate| {
+        let previous_tip_hash = candidate.indexer.tip().1.to_owned();
+        let removed_blocks = if block.height <= candidate.indexer.tip().0 {
+            candidate
+                .indexer
+                .blocks
+                .range(block.height..)
+                .rev()
+                .map(|(_, block)| block.clone())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let outcome = candidate.indexer.apply(block.clone())?;
+        if matches!(outcome, ApplyOutcome::Idempotent { .. }) {
+            return Ok((outcome, false));
+        }
+        let batch = build_outbox(
+            &candidate.indexer.network,
+            &previous_tip_hash,
+            &block,
+            &removed_blocks,
+        )?;
+        candidate.outbox.enqueue(batch)?;
+        Ok((outcome, true))
+    })
 }
 
 /// Claims the first unacknowledged record and persists the lease before the
@@ -170,16 +254,15 @@ pub fn claim_and_persist(
     lease_seconds: u64,
     claim_token: &str,
 ) -> Result<ClaimOutcome, StorageError> {
-    let mut candidate = state.clone();
-    let outcome = candidate.delivery.claim_next(
-        &candidate.outbox,
-        now_unix_seconds,
-        lease_seconds,
-        claim_token,
-    )?;
-    write_snapshot(&candidate, path)?;
-    *state = candidate;
-    Ok(outcome)
+    update_under_writer_lock(state, path, |candidate| {
+        let outcome = candidate.delivery.claim_next(
+            &candidate.outbox,
+            now_unix_seconds,
+            lease_seconds,
+            claim_token,
+        )?;
+        Ok((outcome, true))
+    })
 }
 
 /// Persists acknowledgement before advancing the in-memory delivery cursor.
@@ -189,13 +272,12 @@ pub fn acknowledge_and_persist(
     claim: &DeliveryClaim,
     now_unix_seconds: u64,
 ) -> Result<ResolutionOutcome, StorageError> {
-    let mut candidate = state.clone();
-    let outcome = candidate
-        .delivery
-        .acknowledge(&candidate.outbox, claim, now_unix_seconds)?;
-    write_snapshot(&candidate, path)?;
-    *state = candidate;
-    Ok(outcome)
+    update_under_writer_lock(state, path, |candidate| {
+        let outcome = candidate
+            .delivery
+            .acknowledge(&candidate.outbox, claim, now_unix_seconds)?;
+        Ok((outcome, true))
+    })
 }
 
 /// Releases a claim into a bounded retry delay and persists that schedule.
@@ -206,16 +288,15 @@ pub fn retry_and_persist(
     now_unix_seconds: u64,
     retry_delay_seconds: u64,
 ) -> Result<ResolutionOutcome, StorageError> {
-    let mut candidate = state.clone();
-    let outcome = candidate.delivery.schedule_retry(
-        &candidate.outbox,
-        claim,
-        now_unix_seconds,
-        retry_delay_seconds,
-    )?;
-    write_snapshot(&candidate, path)?;
-    *state = candidate;
-    Ok(outcome)
+    update_under_writer_lock(state, path, |candidate| {
+        let outcome = candidate.delivery.schedule_retry(
+            &candidate.outbox,
+            claim,
+            now_unix_seconds,
+            retry_delay_seconds,
+        )?;
+        Ok((outcome, true))
+    })
 }
 
 /// Atomically checkpoints and removes a bounded prefix of fully acknowledged
@@ -228,22 +309,46 @@ pub fn compact_acknowledged_and_persist(
     if maximum_batches == 0 || maximum_batches > MAX_COMPACTION_BATCHES_PER_CALL {
         return Err(StorageError::InvalidCompaction("maximumBatches"));
     }
-    validate_durable_state(state)?;
-    let acknowledged_batches = state.delivery.pending_position().0;
-    if acknowledged_batches == 0 {
-        return Ok(None);
+    update_under_writer_lock(state, path, |candidate| {
+        validate_durable_state(candidate)?;
+        let acknowledged_batches = candidate.delivery.pending_position().0;
+        if acknowledged_batches == 0 {
+            return Ok((None, false));
+        }
+        let remove = acknowledged_batches.min(maximum_batches);
+        let summary = candidate.outbox.compact_prefix(
+            &candidate.indexer.network,
+            &candidate.indexer.anchor.block_hash,
+            remove,
+        )?;
+        candidate.delivery.rebase_after_compaction(remove)?;
+        Ok((Some(summary), true))
+    })
+}
+
+/// Executes a state transition while holding the local writer lock. The
+/// latest durable snapshot is loaded after lock acquisition, preventing a
+/// stale caller copy from overwriting a newer cooperating writer.
+fn update_under_writer_lock<T>(
+    state: &mut DurableState,
+    path: &Path,
+    transition: impl FnOnce(&mut DurableState) -> Result<(T, bool), StorageError>,
+) -> Result<T, StorageError> {
+    let writer_lock = SnapshotWriterLock::acquire(path, DEFAULT_LOCK_WAIT)?;
+    let mut candidate = match load_snapshot(path) {
+        Ok(current) => current,
+        Err(StorageError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            state.clone()
+        }
+        Err(error) => return Err(error),
+    };
+    let (output, changed) = transition(&mut candidate)?;
+    writer_lock.verify_path()?;
+    if changed {
+        write_snapshot_unlocked(&candidate, path)?;
     }
-    let remove = acknowledged_batches.min(maximum_batches);
-    let mut candidate = state.clone();
-    let summary = candidate.outbox.compact_prefix(
-        &candidate.indexer.network,
-        &candidate.indexer.anchor.block_hash,
-        remove,
-    )?;
-    candidate.delivery.rebase_after_compaction(remove)?;
-    write_snapshot(&candidate, path)?;
     *state = candidate;
-    Ok(Some(summary))
+    Ok(output)
 }
 
 fn restore(payload: SnapshotPayload) -> Result<DurableState, StorageError> {
@@ -330,6 +435,141 @@ fn validate_durable_state(state: &DurableState) -> Result<(), StorageError> {
             Ok(())
         }
     }
+}
+
+#[cfg(unix)]
+fn acquire_writer_lock_unix(
+    path: &Path,
+    maximum_wait: Duration,
+) -> Result<SnapshotWriterLock, StorageError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let (parent, snapshot_name) = open_parent(path)?;
+    let mut lock_name = Vec::with_capacity(snapshot_name.to_bytes().len() + 6);
+    lock_name.push(b'.');
+    lock_name.extend_from_slice(snapshot_name.to_bytes());
+    lock_name.extend_from_slice(b".lock");
+    let name = std::ffi::CString::new(lock_name)
+        .map_err(|_| StorageError::UnsafePath("invalidLockFileName"))?;
+
+    // SAFETY: the directory descriptor and C string remain valid. O_NOFOLLOW
+    // refuses a symbolic-link lock and the returned descriptor is uniquely
+    // owned before it is wrapped in File.
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if descriptor < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return Err(StorageError::UnsafePath("lockNotRegularFile"));
+        }
+        return Err(StorageError::Io(error));
+    }
+    // SAFETY: openat returned this uniquely owned descriptor.
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    validate_lock_metadata(&file.metadata()?)?;
+
+    let started = Instant::now();
+    loop {
+        // SAFETY: `file` owns a live descriptor. LOCK_NB ensures each attempt
+        // remains nonblocking and the loop below provides a bounded wait.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
+                if maximum_wait.is_zero() {
+                    return Err(StorageError::LockBusy);
+                }
+                let elapsed = started.elapsed();
+                if elapsed >= maximum_wait {
+                    return Err(StorageError::LockTimeout);
+                }
+                std::thread::sleep(LOCK_RETRY_INTERVAL.min(maximum_wait - elapsed));
+            }
+            Some(libc::EINTR) => {
+                if started.elapsed() >= maximum_wait {
+                    return if maximum_wait.is_zero() {
+                        Err(StorageError::LockBusy)
+                    } else {
+                        Err(StorageError::LockTimeout)
+                    };
+                }
+            }
+            _ => return Err(StorageError::Io(error)),
+        }
+    }
+
+    let writer_lock = SnapshotWriterLock { file, parent, name };
+    writer_lock.verify_path()?;
+    Ok(writer_lock)
+}
+
+#[cfg(unix)]
+fn validate_lock_metadata(metadata: &fs::Metadata) -> Result<(), StorageError> {
+    use std::os::unix::fs::MetadataExt;
+    if !metadata.is_file() {
+        return Err(StorageError::UnsafePath("lockNotRegularFile"));
+    }
+    if metadata.nlink() != 1 {
+        return Err(StorageError::UnsafePath("lockLinkCount"));
+    }
+    if metadata.mode() & 0o077 != 0 {
+        return Err(StorageError::UnsafePath("lockPermissions"));
+    }
+    // A lock owned by another account can retain or manipulate coordination
+    // independently of the account that owns this process.
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(StorageError::UnsafePath("lockOwner"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_lock_path(parent: &File, name: &std::ffi::CStr, file: &File) -> Result<(), StorageError> {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+    let mut status = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: status is writable and the directory descriptor/name are live.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            status.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(StorageError::UnsafePath("lockChanged"));
+    }
+    // SAFETY: fstatat initialized status on success.
+    let status = unsafe { status.assume_init() };
+    let metadata = file.metadata()?;
+    validate_lock_metadata(&metadata)?;
+    if status.st_mode & libc::S_IFMT != libc::S_IFREG
+        || stat_device_id(status.st_dev) != Some(u128::from(metadata.dev()))
+        || u128::from(status.st_ino) != u128::from(metadata.ino())
+        || status.st_nlink != 1
+        || status.st_mode & 0o077 != 0
+        || status.st_uid != unsafe { libc::geteuid() }
+    {
+        return Err(StorageError::UnsafePath("lockChanged"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::unnecessary_fallible_conversions)]
+fn stat_device_id(device: libc::dev_t) -> Option<u128> {
+    // dev_t is signed on some supported Unix targets and unsigned on others.
+    u128::try_from(device).ok()
 }
 
 fn read_snapshot(path: &Path) -> Result<Vec<u8>, StorageError> {
@@ -657,7 +897,7 @@ mod tests {
             Err(StorageError::InvalidJson(_))
         ));
 
-        write_snapshot(&state, &path).unwrap();
+        fs::write(&path, &bytes).unwrap();
         let mut value: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["payload"]["maximumReorgDepth"] = serde_json::json!(9);
@@ -666,6 +906,25 @@ mod tests {
             load_snapshot(&path),
             Err(StorageError::ChecksumMismatch)
         ));
+    }
+
+    #[test]
+    fn snapshot_initialization_never_overwrites_existing_state() {
+        let directory = private_directory();
+        let path = directory.join("indexer.snapshot.json");
+        let state = DurableState::new(indexer());
+        write_snapshot(&state, &path).unwrap();
+        let before = fs::read(&path).unwrap();
+
+        assert!(matches!(
+            write_snapshot(&state, &path),
+            Err(StorageError::InvalidSnapshot("alreadyInitialized"))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        fs::write(&path, b"corrupt").unwrap();
+        assert!(write_snapshot(&state, &path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"corrupt");
     }
 
     #[test]
@@ -1033,6 +1292,147 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stale_caller_is_rebased_from_disk_before_transition() {
+        let directory = private_directory();
+        let path = directory.join("snapshot.json");
+        let mut current = DurableState::new(indexer());
+        let mut stale = current.clone();
+
+        apply_and_persist(&mut current, block(101, '2', '1'), &path).unwrap();
+        apply_and_persist(&mut stale, block(102, '3', '2'), &path).unwrap();
+
+        assert_eq!(stale.indexer.tip(), (102, hash('3').as_str()));
+        assert_eq!(stale.outbox.batches.len(), 2);
+        let recovered = load_snapshot(&path).unwrap();
+        assert_eq!(recovered.indexer.tip(), (102, hash('3').as_str()));
+        assert_eq!(recovered.outbox.batches.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_stale_claimers_serialize_without_double_claiming() {
+        use std::sync::{Arc, Barrier};
+
+        let directory = private_directory();
+        let path = directory.join("snapshot.json");
+        let mut state = DurableState::new(indexer());
+        apply_and_persist(&mut state, block(101, '2', '1'), &path).unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for token in ['a', 'b'] {
+            let barrier = Arc::clone(&barrier);
+            let path = path.clone();
+            let mut stale = state.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                claim_and_persist(&mut stale, &path, 1_800_000_000, 30, &hash(token)).unwrap()
+            }));
+        }
+        barrier.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, ClaimOutcome::Claimed { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, ClaimOutcome::Unavailable { .. }))
+                .count(),
+            1
+        );
+        load_snapshot(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_acquisition_is_nonblocking_or_bounded() {
+        let directory = private_directory();
+        let path = directory.join("snapshot.json");
+        let _held = SnapshotWriterLock::acquire(&path, Duration::ZERO).unwrap();
+
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&path, Duration::ZERO),
+            Err(StorageError::LockBusy)
+        ));
+        let started = Instant::now();
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&path, Duration::from_millis(25)),
+            Err(StorageError::LockTimeout)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&path, MAX_LOCK_WAIT + Duration::from_millis(1)),
+            Err(StorageError::InvalidLock("maximumWait"))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_lock_files_and_lock_name_replacement_fail_closed() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let symlink_directory = private_directory();
+        let symlink_path = symlink_directory.join("snapshot.json");
+        let symlink_lock = lock_path(&symlink_path);
+        let target = symlink_directory.join("target");
+        fs::write(&target, b"lock").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&target, &symlink_lock).unwrap();
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&symlink_path, Duration::ZERO),
+            Err(StorageError::UnsafePath("lockNotRegularFile"))
+        ));
+
+        let hardlink_directory = private_directory();
+        let hardlink_path = hardlink_directory.join("snapshot.json");
+        let hardlink_lock = lock_path(&hardlink_path);
+        let hardlink_target = hardlink_directory.join("target");
+        fs::write(&hardlink_target, b"lock").unwrap();
+        fs::set_permissions(&hardlink_target, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&hardlink_target, &hardlink_lock).unwrap();
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&hardlink_path, Duration::ZERO),
+            Err(StorageError::UnsafePath("lockLinkCount"))
+        ));
+
+        let permissive_directory = private_directory();
+        let permissive_path = permissive_directory.join("snapshot.json");
+        let permissive_lock = lock_path(&permissive_path);
+        fs::write(&permissive_lock, b"lock").unwrap();
+        fs::set_permissions(&permissive_lock, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            SnapshotWriterLock::acquire(&permissive_path, Duration::ZERO),
+            Err(StorageError::UnsafePath("lockPermissions"))
+        ));
+
+        let replacement_directory = private_directory();
+        let replacement_path = replacement_directory.join("snapshot.json");
+        let replacement_lock = lock_path(&replacement_path);
+        let held = SnapshotWriterLock::acquire(&replacement_path, Duration::ZERO).unwrap();
+        fs::rename(
+            &replacement_lock,
+            replacement_directory.join("displaced.lock"),
+        )
+        .unwrap();
+        fs::write(&replacement_lock, b"replacement").unwrap();
+        fs::set_permissions(&replacement_lock, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            held.verify_path(),
+            Err(StorageError::UnsafePath("lockChanged"))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn symlinks_hardlinks_and_permissive_files_are_refused() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let directory = private_directory();
@@ -1071,6 +1471,12 @@ mod tests {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         }
         path
+    }
+
+    #[cfg(unix)]
+    fn lock_path(snapshot: &Path) -> PathBuf {
+        let name = snapshot.file_name().unwrap().to_string_lossy();
+        snapshot.with_file_name(format!(".{name}.lock"))
     }
 
     fn indexer() -> CanonicalIndexer {

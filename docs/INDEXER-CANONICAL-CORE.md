@@ -18,6 +18,10 @@ Implemented invariants:
 - strict lowercase fixed-width hashes and addresses;
 - bounded event count, topic count and log data size;
 - atomic snapshot replacement with restart recovery;
+- create-once snapshot initialization that refuses to overwrite valid or
+  corrupt existing state;
+- bounded Unix single-writer coordination with reload-under-lock before every
+  persisted transition;
 - fail-closed linkage from anchor through every pending outbox transition to
   the recovered canonical tip;
 - deterministic, idempotent block-applied and block-reverted records;
@@ -61,17 +65,39 @@ performs no network operation: a future worker must use the stable record ID as
 the receiver-side idempotency key. Delivery is at-least-once, so a crash after
 the external operation and before acknowledgement can cause a replay.
 
+`bloch-indexer-delivery-protocol` serializes strict, versioned delivery
+envelopes and receiver acceptance receipts. Domain-separated Ed25519 signatures
+bind the deployment domain, complete chain identity, exact record bytes and
+digest, claim attempt and generation. Sender and receiver roles must use
+distinct IDs and keys from a canonical policy pinned through an independent
+path. Receipt verification can be bound to the caller's expected durable claim,
+but deliberately does not mutate or acknowledge state. A receipt proves only
+that a configured receiver signed that acceptance; it does not prove finality
+or successful downstream processing.
+
 Fully acknowledged batch prefixes can be compacted atomically. Queue schema v2
 retains transition tombstones, batch commitments and a cumulative hash chain
 from the immutable anchor to the compacted tip. Pending or partially delivered
 batches and active claims are never removed. Each call is limited to 10,000
 batches and the retained checkpoint to 50,000 links. The checkpoint hash
 detects inconsistent content but, like the snapshot checksum, is not an
-authenticity signature; external audit retention remains an operator concern.
+authenticity signature. `bloch-indexer-audit` exports and strictly verifies a
+bounded canonical artifact. Optional detached Ed25519 verification binds the
+complete independently pinned audit policy digest, signer, domain, network,
+anchor and checkpoint contents. Retention and signer operation remain external,
+and neither the checksum nor signature proves chain finality.
 
 Snapshot schema v3 stores canonical state, compacted/pending outbox and delivery
 cursor together. It intentionally does not load v1 or v2 snapshots; no
 production migration is claimed in this pre-deployment repository.
+
+On supported Unix systems, persisted mutations use a same-directory advisory
+lock with mode `0600`, reject symlinks, hardlinks, foreign ownership and inode
+replacement, and wait for at most five seconds by default (with a hard maximum
+of 30 seconds). The latest snapshot is reloaded after acquiring the lock so
+cooperating stale callers cannot overwrite each other's transitions. Mutation
+fails closed on unsupported platforms. This is local process coordination, not
+a distributed or multi-host HA lock.
 
 The core does not connect to RPC, deliver webhooks, open an HTTP service or
 authenticate finality. The anchor must come from a separately reviewed source
@@ -84,9 +110,11 @@ cargo test --locked --offline -p bloch-indexer-core
 cargo test --locked --offline -p bloch-indexer-input
 cargo test --locked --offline -p bloch-indexer-query
 cargo test --locked --offline -p bloch-indexer-protocol
+cargo test --locked --offline -p bloch-indexer-delivery-protocol
+cargo test --locked --offline -p bloch-indexer-audit
 ```
 
 The next indexer slices are authenticated transport adapters around these
-contracts, receiver-side delivery integration and externally retained audit
-checkpoints. Multi-process database coordination and high availability are not
-part of this file-snapshot implementation.
+contracts, receiver-side delivery integration, externally operated audit
+retention and database-backed distributed coordination. High availability is
+not part of this file-snapshot implementation.

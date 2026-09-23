@@ -27,6 +27,14 @@ identity, prove finality, activate a network, or authorize asset movement.
   status, blocks and events.
 - `bloch-indexer-protocol`: strict, transport-neutral JSON dispatch and typed
   SDK messages for the v1 read contract.
+- `bloch-indexer-delivery-protocol`: versioned, domain-separated Ed25519
+  delivery envelopes and receiver acceptance receipts bound to exact durable
+  claims and independently pinned sender/receiver trust roles.
+- `bloch-indexer-audit`: bounded canonical checkpoint artifacts and detached
+  Ed25519 verification against an independently pinned audit policy.
+- Unix snapshot mutations use a bounded local single-writer lock, reload the
+  latest durable state while locked and reject unsafe lock files. Snapshot
+  initialization is create-once and cannot overwrite existing state.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
 
@@ -76,11 +84,13 @@ Real-world organizational independence and authenticated consensus
 finality/ancestry are not implemented yet.
 
 The indexer snapshot, pending outbox, compacted checkpoint and delivery cursor
-are recovered together. The libraries define authentication,
-claim/retry/acknowledgement and read contracts, but perform no RPC ingestion,
-webhook delivery, HTTP serving or database-backed HA operation. Producer
-authentication is not consensus finality. The indexer remains a local
-fail-closed core rather than a production service.
+are recovered together. The libraries define producer, delivery, receipt,
+audit, claim/retry/acknowledgement and read contracts, but perform no RPC
+ingestion, webhook delivery, HTTP serving or database-backed HA operation. A
+verified receipt authenticates receiver acceptance but never acknowledges
+durable state automatically. Producer, receiver and audit authentication are
+not consensus finality. The indexer remains a local fail-closed core rather
+than a production service.
 
 ## Product boundaries
 
