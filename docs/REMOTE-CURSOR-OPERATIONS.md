@@ -63,13 +63,14 @@ Missing or conflicting pending bytes fail closed; they must not be synthesized
 from local state. `discard_prepared_state` is permitted only after authenticated
 evidence proves the remote CAS did not accept the candidate.
 
-The repository now defines authenticated cursor observation plus canonical
-signed CAS requests and acceptance/refusal receipts, but not a network service,
-caller authorization or durable linearizable CAS implementation. Therefore
-this sequence is an implementation contract, not deployment evidence, and
-production activation remains blocked. Even a valid signed acceptance receipt
-must be followed by a fresh authenticated cursor observation matching the exact
-successor.
+The repository now defines authenticated cursor observation, canonical signed
+CAS requests and receipts, and an explicitly provisioned durable single-host
+reference CAS core. The reference core returns unsigned decision material; it
+is not a network service, signing authority, replicated linearizable service or
+caller-authorization boundary. Therefore this sequence remains an
+implementation contract, not deployment evidence, and production activation
+is blocked. Even a valid signed acceptance receipt must be followed by a fresh
+authenticated cursor observation matching the exact successor.
 
 ## Migration
 

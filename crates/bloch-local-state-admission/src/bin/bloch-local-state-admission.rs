@@ -167,7 +167,6 @@ fn run() -> Result<(), String> {
 const SYSTEMD_ARGUMENTS: &[&str] = &[
     "--coordination-directory",
     "--cursor-store",
-    "--expected-state-identity",
     "--state-store",
 ];
 const MANUAL_PAY_ARGUMENTS: &[&str] = &[

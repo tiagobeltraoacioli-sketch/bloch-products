@@ -25,7 +25,11 @@ Files:
 - `systemd/bloch-products-admission@.service`: legacy-named synthetic
   storage-check oneshot; it is not a production admission unit.
 - `systemd/bloch-products.tmpfiles.conf`: optional directory declarations;
-  review before using and never apply blindly on an occupied host.
+  review before using and never apply blindly on an occupied host. It includes
+  isolated `state`, `cursor` and boot-scoped `coord` paths for the future
+  authenticated flow; creating those paths does not activate that flow. An
+  empty recreated state/cursor directory after prior use is an incident and
+  never authorization to bootstrap generation zero.
 - `config/data.env.example` and `config/pay.env.example`: non-secret examples.
 - `preflight.sh`: read-only host and file admission checks.
 - `credential-preflight.sh`: checks the staged credential metadata as the

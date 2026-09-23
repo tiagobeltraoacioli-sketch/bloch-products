@@ -114,6 +114,19 @@ identity, prove finality, activate a network, or authorize asset movement.
   observations of the exact cursor held by an external control plane, with a
   secure offline verification CLI. Networking, remote storage and operational
   independence remain external gates.
+- `bloch-local-state-remote-session`: transport-neutral one-shot fetch session
+  with an in-memory CSPRNG nonce, monotonic deadline, current-time freshness and
+  an opaque verified cursor result. It supplies no network transport itself.
+- `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
+  the one-shot remote session to coordinated checkpoint, cursor, store and
+  semantic admission without materializing a raw cursor or nonce file.
+- `bloch-local-state-remote-cursor-control-plane`: Unix reference core for
+  explicitly provisioned, durable, idempotent and serialized cursor CAS. It
+  returns unsigned decision material and is not a replicated production
+  service or signing authority.
+- `bloch-local-state-transition`: coordinated writer and recovery composition
+  across prepared state, external checkpoint/CAS callbacks, freshly observed
+  successor, local cursor advancement, promotion and semantic postcheck.
 - `bloch-local-state-rebootstrap`: offline, create-only v1-to-v2 re-bootstrap
   for the narrow legacy case that already committed to a complete state-root
   v2 and is re-signed by checkpoint authorities. It refuses root-v1 lineage,

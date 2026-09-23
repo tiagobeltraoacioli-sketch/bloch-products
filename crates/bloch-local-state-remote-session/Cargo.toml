@@ -1,0 +1,15 @@
+[package]
+name = "bloch-local-state-remote-session"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+getrandom = "0.2.17"
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+ed25519-dalek.workspace = true

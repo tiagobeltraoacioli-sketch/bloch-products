@@ -1,0 +1,24 @@
+[package]
+name = "bloch-local-state-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-local-state-admission = { path = "../bloch-local-state-admission" }
+bloch-local-state-coordination = { path = "../bloch-local-state-coordination" }
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+bloch-local-state-remote-session = { path = "../bloch-local-state-remote-session" }
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-data-governance = { path = "../bloch-data-governance" }
+bloch-local-state-checkpoint = { path = "../bloch-local-state-checkpoint" }
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }
+bloch-pay-adjustments = { path = "../bloch-pay-adjustments" }
+ed25519-dalek.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

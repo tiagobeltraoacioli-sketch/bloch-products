@@ -79,10 +79,12 @@ the current cursor's root digest. Initial creation is a distinct
 generation zero and requires a root with no predecessor.
 
 `parse_remote_cursor_cas_request` returns an opaque validated request with
-getters for a control-plane implementation. It validates structure and lineage
-only: the request is not signed by a client and conveys no client authorization.
-Authentication and authorization of the requesting workload remain transport
-and control-plane responsibilities.
+getters for a control-plane implementation, including the independently pinned
+policy digest, signature domain, state identity, request ID and digest, exact
+current and successor cursors, and the retained canonical request bytes. It
+validates structure and lineage only: the request is not signed by a client and
+conveys no client authorization. Authentication and authorization of the
+requesting workload remain transport and control-plane responsibilities.
 
 The receipt embeds the exact canonical request and its SHA-256 digest. Its
 decision is a tagged `accepted` or `refused` value, signed by the policy
@@ -92,6 +94,18 @@ verified Rust result is an enum; only the acceptance variant exposes the
 successor cursor, so a signed refusal cannot be consumed as acceptance.
 Compare-and-swap conflicts should therefore be returned as a signed `refused`
 receipt with a stable reason code, never as an HTTP/status-only side channel.
+
+Transition and crash-recovery code should use
+`verify_remote_cursor_cas_exchange`, not retain a bare verified receipt. It
+returns an opaque `VerifiedRemoteCursorCasExchange` only after binding the
+receipt to the exact independently retained request, policy digest, domain,
+state identity, request ID and digest, current cursor, and successor cursor.
+The exchange retains byte-exact canonical request and receipt representations
+through `request_bytes()` and `receipt_bytes()` for durable journaling and
+exact replay verification. Its fields and those of the validated request and
+verified receipt variants are private; public access is read-only. Persist both
+byte strings and re-run exchange verification on recovery rather than treating
+an acceptance object or cursor alone as authorization for another request.
 
 This protocol authenticates what the external authorities signed. Even a valid
 acceptance deliberately reports `remote_cas_execution_proven() == false`: this

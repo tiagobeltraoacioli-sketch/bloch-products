@@ -3,9 +3,11 @@
 ## Status and scope
 
 This is a production-gate specification, not deployment evidence. The remote
-cursor protocol, local coordination, semantic admission and re-bootstrap tools
-exist as building blocks, but the required network fetcher, remote monotonic
-CAS service and systemd composition are not deployed or qualified.
+cursor protocol, memory-only fetch session, local coordination, semantic
+admission, transition/recovery composition, single-host CAS reference core and
+re-bootstrap tools exist as building blocks. A qualified network transport,
+replicated remote service, authority signing boundary and production systemd
+composition are not deployed or qualified.
 
 The existing `bloch-products-admission@.service` is **synthetic-only**. It checks
 a locally staged root with the generic store verifier. It does not authenticate
@@ -137,8 +139,10 @@ specified in the change record and tested at both boundaries.
 
 ## Remote CAS and recovery contract
 
-Production writers remain disabled until a remote service provides durable,
-linearizable compare-and-swap. A request contains the exact old cursor digest,
+Production writers remain disabled until a qualified remote service provides
+durable, linearizable compare-and-swap. The repository's Unix reference core
+demonstrates serialized durable single-host behavior, but is neither a
+replicated service nor a signing authority. A request contains the exact old cursor digest,
 exact canonical successor cursor, state identity and an idempotency/transaction
 ID. The service allows create-once absent-to-generation-zero bootstrap, exactly
 one-generation advancement and exact idempotent replay. It returns a signed
@@ -192,15 +196,15 @@ require a separate authority-approved recovery or re-genesis ceremony.
 
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
-| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Open** | Product-aware integrated verification and replay tests |
+| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition and negative tests exist; qualified transport/systemd integration evidence remains |
 | P0 | Trusted time cannot be supplied by operator argument | **Open** | Qualified clock design, skew limits and rollback tests |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Open** | Service implementation, signed receipts, concurrency and recovery tests |
-| P0 | One orchestrated writer/recovery path holds coordination throughout | **Open** | Crash-injection suite across every durable boundary |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core and concurrency tests exist; replicated service, external signing and operational qualification remain |
+| P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition exists; complete crash-injection and target-host evidence remain |
 | P0 | Legacy synthetic unit cannot satisfy production target | **Open** | Renamed/isolated unit and target-level negative test |
-| P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Open** | Host manifest, tmpfiles/unit verification and ownership checks |
-| P1 | Exact credential names and provenance | **Open** | systemd credential integration tests; arbitrary-name rejection |
-| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Open** | Repeated-start, reboot and fetch-failure tests |
-| P1 | Explicit Data/Pay state-identity mapping | **Open** | Cross-product/cross-tenant negative tests |
+| P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations exist; host manifest, unit verification and ownership checks remain |
+| P1 | Exact credential names and provenance | **Partial** | Fixed CLI credential names exist; systemd integration tests and arbitrary-name rejection remain |
+| P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session tests exist; repeated-start, reboot and transport-failure evidence remain |
+| P1 | Explicit Data/Pay state-identity mapping | **Partial** | Library cross-identity tests exist; deployed cross-product/cross-tenant evidence remains |
 | P1 | Re-bootstrap maintenance and installation runbook | **Partial** | Fencing/install drill and independently retained evidence |
 
 No P0 gate is currently closed. DEX/bridge/payment or regulated-data activation

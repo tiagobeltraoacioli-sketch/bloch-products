@@ -78,8 +78,7 @@ struct RemoteCursorCasReceipt {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedRemoteCursorCasAcceptance {
-    successor: CheckpointCursor,
-    request_sha256: String,
+    provenance: ReceiptProvenance,
     receipt_sha256: String,
     decided_at_unix_seconds: u64,
     authority_ids: Vec<String>,
@@ -87,10 +86,25 @@ pub struct VerifiedRemoteCursorCasAcceptance {
 
 impl VerifiedRemoteCursorCasAcceptance {
     pub fn successor(&self) -> &CheckpointCursor {
-        &self.successor
+        &self.provenance.successor
+    }
+    pub fn expected_current(&self) -> Option<&CheckpointCursor> {
+        self.provenance.expected_current.as_ref()
+    }
+    pub fn request_id(&self) -> &str {
+        &self.provenance.request_id
     }
     pub fn request_sha256(&self) -> &str {
-        &self.request_sha256
+        &self.provenance.request_sha256
+    }
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        &self.provenance.remote_cursor_policy_sha256
+    }
+    pub fn signature_domain(&self) -> &str {
+        &self.provenance.signature_domain
+    }
+    pub fn state_identity(&self) -> &str {
+        &self.provenance.state_identity
     }
     pub fn receipt_sha256(&self) -> &str {
         &self.receipt_sha256
@@ -109,7 +123,7 @@ impl VerifiedRemoteCursorCasAcceptance {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedRemoteCursorCasRefusal {
     reason_code: String,
-    request_sha256: String,
+    provenance: ReceiptProvenance,
     receipt_sha256: String,
     decided_at_unix_seconds: u64,
     authority_ids: Vec<String>,
@@ -120,7 +134,25 @@ impl VerifiedRemoteCursorCasRefusal {
         &self.reason_code
     }
     pub fn request_sha256(&self) -> &str {
-        &self.request_sha256
+        &self.provenance.request_sha256
+    }
+    pub fn request_id(&self) -> &str {
+        &self.provenance.request_id
+    }
+    pub fn expected_current(&self) -> Option<&CheckpointCursor> {
+        self.provenance.expected_current.as_ref()
+    }
+    pub fn successor(&self) -> &CheckpointCursor {
+        &self.provenance.successor
+    }
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        &self.provenance.remote_cursor_policy_sha256
+    }
+    pub fn signature_domain(&self) -> &str {
+        &self.provenance.signature_domain
+    }
+    pub fn state_identity(&self) -> &str {
+        &self.provenance.state_identity
     }
     pub fn receipt_sha256(&self) -> &str {
         &self.receipt_sha256
@@ -137,6 +169,82 @@ impl VerifiedRemoteCursorCasRefusal {
 pub enum VerifiedRemoteCursorCasReceipt {
     Accepted(VerifiedRemoteCursorCasAcceptance),
     Refused(VerifiedRemoteCursorCasRefusal),
+}
+
+impl VerifiedRemoteCursorCasReceipt {
+    fn provenance(&self) -> &ReceiptProvenance {
+        match self {
+            Self::Accepted(accepted) => &accepted.provenance,
+            Self::Refused(refused) => &refused.provenance,
+        }
+    }
+
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        &self.provenance().remote_cursor_policy_sha256
+    }
+    pub fn signature_domain(&self) -> &str {
+        &self.provenance().signature_domain
+    }
+    pub fn state_identity(&self) -> &str {
+        &self.provenance().state_identity
+    }
+    pub fn request_id(&self) -> &str {
+        &self.provenance().request_id
+    }
+    pub fn request_sha256(&self) -> &str {
+        &self.provenance().request_sha256
+    }
+    pub fn expected_current(&self) -> Option<&CheckpointCursor> {
+        self.provenance().expected_current.as_ref()
+    }
+    pub fn successor(&self) -> &CheckpointCursor {
+        &self.provenance().successor
+    }
+    pub fn receipt_sha256(&self) -> &str {
+        match self {
+            Self::Accepted(accepted) => accepted.receipt_sha256(),
+            Self::Refused(refused) => refused.receipt_sha256(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReceiptProvenance {
+    remote_cursor_policy_sha256: String,
+    signature_domain: String,
+    state_identity: String,
+    request_id: String,
+    request_sha256: String,
+    expected_current: Option<CheckpointCursor>,
+    successor: CheckpointCursor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedRemoteCursorCasExchange {
+    request: ValidatedRemoteCursorCasRequest,
+    receipt: VerifiedRemoteCursorCasReceipt,
+    receipt_bytes: Vec<u8>,
+}
+
+impl VerifiedRemoteCursorCasExchange {
+    pub fn request(&self) -> &ValidatedRemoteCursorCasRequest {
+        &self.request
+    }
+    pub fn receipt(&self) -> &VerifiedRemoteCursorCasReceipt {
+        &self.receipt
+    }
+    pub fn request_bytes(&self) -> &[u8] {
+        self.request.canonical_bytes()
+    }
+    pub fn receipt_bytes(&self) -> &[u8] {
+        &self.receipt_bytes
+    }
+    pub fn accepted_successor(&self) -> Option<&CheckpointCursor> {
+        match &self.receipt {
+            VerifiedRemoteCursorCasReceipt::Accepted(accepted) => Some(accepted.successor()),
+            VerifiedRemoteCursorCasReceipt::Refused(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -174,6 +282,7 @@ pub struct RemoteCursorCasRequestParameters<'a> {
 pub struct ValidatedRemoteCursorCasRequest {
     request: RemoteCursorCasRequest,
     request_sha256: String,
+    canonical_bytes: Vec<u8>,
 }
 
 impl ValidatedRemoteCursorCasRequest {
@@ -182,6 +291,12 @@ impl ValidatedRemoteCursorCasRequest {
     }
     pub fn state_identity(&self) -> &str {
         &self.request.state_identity
+    }
+    pub fn remote_cursor_policy_sha256(&self) -> &str {
+        &self.request.remote_cursor_policy_sha256
+    }
+    pub fn signature_domain(&self) -> &str {
+        &self.request.signature_domain
     }
     pub fn request_id(&self) -> &str {
         &self.request.request_id
@@ -204,6 +319,9 @@ impl ValidatedRemoteCursorCasRequest {
     pub fn request_sha256(&self) -> &str {
         &self.request_sha256
     }
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
 }
 
 /// Strictly validates a request before a control plane considers any CAS.
@@ -218,6 +336,7 @@ pub fn parse_remote_cursor_cas_request(
     Ok(ValidatedRemoteCursorCasRequest {
         request,
         request_sha256: hash(bytes),
+        canonical_bytes: bytes.to_vec(),
     })
 }
 
@@ -349,11 +468,19 @@ pub fn verify_remote_cursor_cas_receipt(
     let request_sha256 = receipt.envelope.request_sha256;
     let receipt_sha256 = hash(receipt_bytes);
     let decided_at_unix_seconds = receipt.envelope.decided_at_unix_seconds;
+    let provenance = ReceiptProvenance {
+        remote_cursor_policy_sha256: expected_request.remote_cursor_policy_sha256.clone(),
+        signature_domain: expected_request.signature_domain.clone(),
+        state_identity: expected_request.state_identity.clone(),
+        request_id: expected_request.request_id.clone(),
+        request_sha256,
+        expected_current: expected_request.expected_current_cursor.clone(),
+        successor: expected_request.successor_cursor.clone(),
+    };
     match receipt.envelope.decision {
         RemoteCursorCasDecision::Accepted => Ok(VerifiedRemoteCursorCasReceipt::Accepted(
             VerifiedRemoteCursorCasAcceptance {
-                successor: expected_request.successor_cursor,
-                request_sha256,
+                provenance,
                 receipt_sha256,
                 decided_at_unix_seconds,
                 authority_ids,
@@ -362,13 +489,53 @@ pub fn verify_remote_cursor_cas_receipt(
         RemoteCursorCasDecision::Refused { reason_code } => Ok(
             VerifiedRemoteCursorCasReceipt::Refused(VerifiedRemoteCursorCasRefusal {
                 reason_code,
-                request_sha256,
+                provenance,
                 receipt_sha256,
                 decided_at_unix_seconds,
                 authority_ids,
             }),
         ),
     }
+}
+
+/// Verifies and retains one exact canonical request/receipt exchange.
+///
+/// Recovery and transition code should persist and consume this aggregate
+/// instead of accepting a detached verified receipt. Its private fields ensure
+/// the request and receipt provenance can only be paired by this verifier.
+pub fn verify_remote_cursor_cas_exchange(
+    receipt_bytes: &[u8],
+    expected_request_bytes: &[u8],
+    policy: &RemoteCursorPolicy,
+    expected_policy_sha256: &str,
+    evaluated_at_unix_seconds: u64,
+) -> Result<VerifiedRemoteCursorCasExchange, RemoteCursorCasError> {
+    let request =
+        parse_remote_cursor_cas_request(expected_request_bytes, policy, expected_policy_sha256)?;
+    let receipt = verify_remote_cursor_cas_receipt(
+        receipt_bytes,
+        expected_request_bytes,
+        policy,
+        expected_policy_sha256,
+        evaluated_at_unix_seconds,
+    )?;
+
+    if receipt.remote_cursor_policy_sha256() != request.remote_cursor_policy_sha256()
+        || receipt.signature_domain() != request.signature_domain()
+        || receipt.state_identity() != request.state_identity()
+        || receipt.request_id() != request.request_id()
+        || receipt.request_sha256() != request.request_sha256()
+        || receipt.expected_current() != request.expected_current()
+        || receipt.successor() != request.successor()
+    {
+        return Err(RemoteCursorCasError::RequestMismatch);
+    }
+
+    Ok(VerifiedRemoteCursorCasExchange {
+        request,
+        receipt,
+        receipt_bytes: receipt_bytes.to_vec(),
+    })
 }
 
 fn receipt_envelope(
@@ -821,6 +988,12 @@ mod tests {
             panic!("acceptance must not decode as refusal");
         };
         assert_eq!(accepted.successor(), &roots.successor_cursor);
+        assert_eq!(accepted.expected_current(), Some(&roots.current_cursor));
+        assert_eq!(accepted.request_id(), "request-1");
+        assert_eq!(accepted.request_sha256(), hash(&request));
+        assert_eq!(accepted.remote_cursor_policy_sha256(), pin);
+        assert_eq!(accepted.signature_domain(), policy.signature_domain);
+        assert_eq!(accepted.state_identity(), policy.state_identity);
         assert_eq!(accepted.authority_ids(), &["authority-1", "authority-2"]);
         assert!(!accepted.remote_cas_execution_proven());
     }
@@ -852,6 +1025,13 @@ mod tests {
             panic!("refusal must remain a distinct type");
         };
         assert_eq!(refused.reason_code(), "compare_and_swap_conflict");
+        assert_eq!(refused.request_id(), "request-2");
+        assert_eq!(refused.request_sha256(), hash(&request));
+        assert_eq!(refused.expected_current(), Some(&roots.current_cursor));
+        assert_eq!(refused.successor(), &roots.successor_cursor);
+        assert_eq!(refused.remote_cursor_policy_sha256(), pin);
+        assert_eq!(refused.signature_domain(), policy.signature_domain);
+        assert_eq!(refused.state_identity(), policy.state_identity);
     }
 
     #[test]
@@ -976,6 +1156,93 @@ mod tests {
                 &pin
             ),
             Err(RemoteCursorCasError::InvalidSuccessor)
+        ));
+    }
+
+    #[test]
+    fn verified_exchange_retains_exact_canonical_request_and_receipt() {
+        let roots = Roots::new();
+        let (policy, _, pin) = policy();
+        let request = create_remote_cursor_cas_request(
+            RemoteCursorCasRequestParameters {
+                expected_current: Some(&roots.current_cursor),
+                successor_cursor: &roots.successor_cursor,
+                successor_root: &roots.successor_root,
+                request_id: "request-exchange",
+                request_nonce: NONCE,
+                requested_at_unix_seconds: 200,
+            },
+            &policy,
+            &pin,
+        )
+        .unwrap();
+        let (receipt, policy, pin) = signed_receipt(&request, RemoteCursorCasDecision::Accepted);
+
+        let exchange =
+            verify_remote_cursor_cas_exchange(&receipt, &request, &policy, &pin, 250).unwrap();
+        assert_eq!(exchange.request_bytes(), request);
+        assert_eq!(exchange.receipt_bytes(), receipt);
+        assert_eq!(exchange.request().canonical_bytes(), request);
+        assert_eq!(exchange.request().request_sha256(), hash(&request));
+        assert_eq!(exchange.receipt().request_id(), "request-exchange");
+        assert_eq!(exchange.accepted_successor(), Some(&roots.successor_cursor));
+
+        let refused = RemoteCursorCasDecision::Refused {
+            reason_code: "compare_and_swap_conflict".into(),
+        };
+        let (receipt, policy, pin) = signed_receipt(&request, refused);
+        let exchange =
+            verify_remote_cursor_cas_exchange(&receipt, &request, &policy, &pin, 250).unwrap();
+        assert!(exchange.accepted_successor().is_none());
+        assert!(matches!(
+            exchange.receipt(),
+            VerifiedRemoteCursorCasReceipt::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn exchange_rejects_request_substitution_and_mixed_policy() {
+        let roots = Roots::new();
+        let (policy, _, pin) = policy();
+        let request = create_remote_cursor_cas_request(
+            RemoteCursorCasRequestParameters {
+                expected_current: Some(&roots.current_cursor),
+                successor_cursor: &roots.successor_cursor,
+                successor_root: &roots.successor_root,
+                request_id: "request-bound",
+                request_nonce: NONCE,
+                requested_at_unix_seconds: 200,
+            },
+            &policy,
+            &pin,
+        )
+        .unwrap();
+        let substituted = create_remote_cursor_cas_request(
+            RemoteCursorCasRequestParameters {
+                expected_current: Some(&roots.current_cursor),
+                successor_cursor: &roots.successor_cursor,
+                successor_root: &roots.successor_root,
+                request_id: "request-substituted",
+                request_nonce: NONCE,
+                requested_at_unix_seconds: 200,
+            },
+            &policy,
+            &pin,
+        )
+        .unwrap();
+        let (receipt, policy, pin) = signed_receipt(&request, RemoteCursorCasDecision::Accepted);
+
+        assert!(matches!(
+            verify_remote_cursor_cas_exchange(&receipt, &substituted, &policy, &pin, 250),
+            Err(RemoteCursorCasError::RequestMismatch)
+        ));
+
+        let mut other_policy = policy.clone();
+        other_policy.policy_id = "other-remote-cas-policy".into();
+        let other_pin = remote_cursor_policy_sha256(&other_policy).unwrap();
+        assert!(matches!(
+            verify_remote_cursor_cas_exchange(&receipt, &request, &other_policy, &other_pin, 250),
+            Err(RemoteCursorCasError::InvalidRequest)
         ));
     }
 }
