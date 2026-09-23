@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+mod authentication;
+pub use authentication::*;
+
 pub const POLICY_SCHEMA: &str = "bloch.pay.reconciliation-policy.v1";
 pub const INVOICE_SCHEMA: &str = "bloch.pay.invoice.v1";
 pub const OBSERVATION_SCHEMA: &str = "bloch.pay.payment-observation.v1";
@@ -123,12 +126,46 @@ impl InvoiceReconciliation {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ObservationEvidenceRef {
+    observation_id: String,
+    authenticated: bool,
+    canonical_observation_sha256: Option<String>,
+    observer_id: Option<String>,
+    observer_policy_sha256: Option<String>,
+    reconciliation_policy_sha256: Option<String>,
+}
+
+impl ObservationEvidenceRef {
+    pub fn observation_id(&self) -> &str {
+        &self.observation_id
+    }
+    pub fn authenticated(&self) -> bool {
+        self.authenticated
+    }
+    pub fn canonical_observation_sha256(&self) -> Option<&str> {
+        self.canonical_observation_sha256.as_deref()
+    }
+    pub fn observer_id(&self) -> Option<&str> {
+        self.observer_id.as_deref()
+    }
+    pub fn observer_policy_sha256(&self) -> Option<&str> {
+        self.observer_policy_sha256.as_deref()
+    }
+    pub fn reconciliation_policy_sha256(&self) -> Option<&str> {
+        self.reconciliation_policy_sha256.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReconciliationReport {
     schema: String,
     policy_sha256: String,
     evaluated_at_unix_seconds: u64,
     invoices: Vec<InvoiceReconciliation>,
     unmatched_observation_ids: Vec<String>,
+    observations_authenticated: bool,
+    observation_evidence: Vec<ObservationEvidenceRef>,
     settlement_qualified: bool,
     credit_authorized: bool,
 }
@@ -142,6 +179,12 @@ impl ReconciliationReport {
     }
     pub fn unmatched_observation_ids(&self) -> &[String] {
         &self.unmatched_observation_ids
+    }
+    pub fn observations_authenticated(&self) -> bool {
+        self.observations_authenticated
+    }
+    pub fn observation_evidence(&self) -> &[ObservationEvidenceRef] {
+        &self.observation_evidence
     }
     pub fn settlement_qualified(&self) -> bool {
         self.settlement_qualified
@@ -249,6 +292,84 @@ pub fn reconcile(
     invoices: &[Invoice],
     observations: &[PaymentObservation],
     evaluated_at_unix_seconds: u64,
+) -> Result<ReconciliationReport, ReconciliationError> {
+    let evidence = observations
+        .iter()
+        .map(|observation| ObservationEvidenceRef {
+            observation_id: observation.observation_id.clone(),
+            authenticated: false,
+            canonical_observation_sha256: None,
+            observer_id: None,
+            observer_policy_sha256: None,
+            reconciliation_policy_sha256: None,
+        })
+        .collect();
+    reconcile_inner(
+        policy,
+        invoices,
+        observations,
+        evaluated_at_unix_seconds,
+        false,
+        evidence,
+    )
+}
+
+/// Reconciles only observations that have already passed pinned Ed25519
+/// authentication. The expected reconciliation-policy digest is checked again
+/// and every observation is linked to immutable, read-only evidence metadata.
+pub fn reconcile_authenticated(
+    policy: &ReconciliationPolicy,
+    expected_policy_sha256: &str,
+    invoices: &[Invoice],
+    authenticated_observations: &[AuthenticatedPaymentObservation],
+    evaluated_at_unix_seconds: u64,
+) -> Result<ReconciliationReport, ReconciliationError> {
+    let actual_policy_sha256 = policy_sha256(policy)?;
+    if actual_policy_sha256 != expected_policy_sha256 {
+        return Err(ReconciliationError::PolicyDigestMismatch);
+    }
+    let mut observations = Vec::with_capacity(authenticated_observations.len());
+    let mut evidence = Vec::with_capacity(authenticated_observations.len());
+    for authenticated in authenticated_observations {
+        if authenticated.reconciliation_policy_sha256() != expected_policy_sha256 {
+            return Err(ReconciliationError::PolicyDigestMismatch);
+        }
+        let observation = authenticated.observation().clone();
+        let canonical =
+            canonical_observation_bytes(policy, &observation, evaluated_at_unix_seconds)?;
+        let canonical_sha256 = sha256(&canonical);
+        if canonical_sha256 != authenticated.canonical_observation_sha256() {
+            return Err(ReconciliationError::InvalidObservation(
+                "authenticationEvidence",
+            ));
+        }
+        evidence.push(ObservationEvidenceRef {
+            observation_id: observation.observation_id.clone(),
+            authenticated: true,
+            canonical_observation_sha256: Some(canonical_sha256),
+            observer_id: Some(authenticated.observer_id().into()),
+            observer_policy_sha256: Some(authenticated.observer_policy_sha256().into()),
+            reconciliation_policy_sha256: Some(authenticated.reconciliation_policy_sha256().into()),
+        });
+        observations.push(observation);
+    }
+    reconcile_inner(
+        policy,
+        invoices,
+        &observations,
+        evaluated_at_unix_seconds,
+        true,
+        evidence,
+    )
+}
+
+fn reconcile_inner(
+    policy: &ReconciliationPolicy,
+    invoices: &[Invoice],
+    observations: &[PaymentObservation],
+    evaluated_at_unix_seconds: u64,
+    observations_authenticated: bool,
+    mut observation_evidence: Vec<ObservationEvidenceRef>,
 ) -> Result<ReconciliationReport, ReconciliationError> {
     validate_policy(policy)?;
     if evaluated_at_unix_seconds < policy.effective_at_unix_seconds
@@ -364,12 +485,15 @@ pub fn reconcile(
         });
     }
     unmatched.sort();
+    observation_evidence.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
     Ok(ReconciliationReport {
         schema: REPORT_SCHEMA.into(),
         policy_sha256: policy_sha256(policy)?,
         evaluated_at_unix_seconds,
         invoices: results,
         unmatched_observation_ids: unmatched,
+        observations_authenticated,
+        observation_evidence,
         settlement_qualified: false,
         credit_authorized: false,
     })

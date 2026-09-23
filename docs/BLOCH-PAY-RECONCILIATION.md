@@ -16,9 +16,12 @@ binds:
 - sorted payment routes with network, asset, minor-unit exponent and exact
   destination.
 
-A source ID is an allowlist selector, not source authentication. Production
-must add an authenticated observation envelope from a qualified indexer and
-independently pinned trust policy.
+A source ID by itself remains only an allowlist selector. The authenticated
+path additionally verifies an exact canonical observation with a
+domain-separated Ed25519 signature and an independently pinned observer trust
+policy. That policy binds the observer key to the tenant, merchant, source,
+network and reconciliation-policy digest. Cryptographic authentication does not
+prove the observer is independent or operationally qualified.
 
 ## Deterministic matching
 
@@ -44,12 +47,23 @@ and every invoice result encodes both `settlementQualified: false` and
 `creditAuthorized: false`; callers cannot provide or deserialize a success
 claim into the report.
 
+`reconcile_authenticated` accepts only opaque values produced by successful
+signature verification. Its report retains the observation, observer-policy
+and reconciliation-policy digests. The raw reconciliation function is
+explicitly marked unauthenticated and its report cannot enter the durable
+allocation store.
+
+The Unix-only allocation store persists an authenticated allocation under a
+bounded single-writer lock. It rejects conflicting allocation IDs, observation
+IDs and network transaction/event identities; exact retries return the same
+receipt. This is local crash-safe idempotency, not distributed consistency.
+
 ## Remaining production gates
 
-- authenticated, independently pinned payment observations;
+- operational qualification and independence of the configured observers;
 - network-specific canonical ancestry and settlement/finality evidence;
-- durable allocation so an accepted chain event cannot be credited twice
-  across processes, restarts or databases;
+- distributed allocation consistency and high availability across hosts and
+  databases (the current durable store is single-host);
 - invoice issuance authorization and policy-wallet/HSM integration;
 - privacy-governed storage and controlled customer/merchant APIs;
 - refunds, disputes, cancellations, currency/asset metadata governance and
@@ -57,6 +71,6 @@ claim into the report.
 - approved credit/release policy and human/organizational authorities; and
 - authorized bank, payment institution, acquirer, Pix or settlement partners.
 
-Until those gates pass, Bloch Pay is an offline reconciliation component only.
-It opens no network connection, owns no key, signs no transaction and moves no
-funds.
+Until those gates pass, Bloch Pay remains an offline authentication,
+reconciliation and local allocation component only. It opens no network
+connection, owns no private key, signs no transaction and moves no funds.

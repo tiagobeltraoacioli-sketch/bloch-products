@@ -10,7 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 
+mod dataset_schema;
 mod record;
+pub use dataset_schema::{
+    DATASET_SCHEMA_SCHEMA, DatasetFieldSchema, DatasetSchema, DatasetSchemaError,
+    DatasetValueSchema, MAX_ARRAY_ITEMS, MAX_DATASET_SCHEMA_BYTES, MAX_STRING_BYTES, ScalarType,
+    canonical_dataset_schema_bytes, dataset_schema_sha256, parse_dataset_schema,
+};
 pub use record::{
     AuthorizedJsonIngestion, JsonIngestionContext, JsonIngestionError, MAX_JSON_RECORD_BYTES,
     authorize_json_ingestion,

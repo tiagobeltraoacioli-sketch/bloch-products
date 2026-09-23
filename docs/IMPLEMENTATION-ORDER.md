@@ -33,9 +33,11 @@ will follow working implementations and retained evidence.
    operated WORM replicas and distributed database/HA operation remain open.
 6. Non-custodial payment reconciliation — deterministic invoice/observation
    matching with pinned routes and permanently false settlement/credit claims is
-   implemented. Authenticated observations, qualified finality, durable
-   allocation, policy-wallet execution, bank/Pix integration and credit policy
-   remain open.
+   implemented. Exact observations can be authenticated against pinned Ed25519
+   observer policies and flow through authenticated reconciliation into a
+   durable local idempotent allocation store. Observer independence and
+   qualification, network finality, distributed allocation HA, policy-wallet
+   execution, bank/Pix integration and credit policy remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

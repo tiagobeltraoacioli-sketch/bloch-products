@@ -1,6 +1,7 @@
 use crate::{
-    AuthorizedDecision, DataOperation, DecisionContext, GovernanceError, GovernancePolicy,
-    MAX_FIELDS, authorize_governance_gate, reject_duplicate_keys, valid_identifier,
+    AuthorizedDecision, DataOperation, DatasetSchemaError, DecisionContext, GovernanceError,
+    GovernancePolicy, MAX_FIELDS, authorize_governance_gate, parse_dataset_schema,
+    reject_duplicate_keys, valid_identifier,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -32,6 +33,7 @@ pub struct AuthorizedJsonIngestion {
     authorization: AuthorizedDecision,
     canonical_record_bytes: Vec<u8>,
     record_sha256: String,
+    dataset_schema_sha256: String,
     observed_field_ids: Vec<String>,
 }
 
@@ -42,6 +44,10 @@ impl AuthorizedJsonIngestion {
 
     pub fn record_sha256(&self) -> &str {
         &self.record_sha256
+    }
+
+    pub fn dataset_schema_sha256(&self) -> &str {
+        &self.dataset_schema_sha256
     }
 
     pub fn canonical_record_bytes(&self) -> &[u8] {
@@ -67,6 +73,8 @@ pub enum JsonIngestionError {
     InvalidFieldInventory,
     #[error("cannot encode canonical JSON record: {0}")]
     Encoding(String),
+    #[error("dataset schema rejected ingestion: {0}")]
+    DatasetSchema(#[from] DatasetSchemaError),
     #[error("governance denied JSON ingestion: {0}")]
     Governance(#[from] GovernanceError),
 }
@@ -80,8 +88,17 @@ pub enum JsonIngestionError {
 pub fn authorize_json_ingestion(
     policy: &GovernancePolicy,
     context: &JsonIngestionContext,
+    dataset_schema_bytes: &[u8],
+    expected_dataset_schema_sha256: &str,
     record_bytes: &[u8],
 ) -> Result<AuthorizedJsonIngestion, JsonIngestionError> {
+    let dataset_schema =
+        parse_dataset_schema(dataset_schema_bytes, expected_dataset_schema_sha256)?;
+    if dataset_schema.schema_id != context.dataset_schema_id
+        || dataset_schema.schema_id != policy.dataset_schema_id
+    {
+        return Err(DatasetSchemaError::RecordMismatch("schema_id:mismatch".into()).into());
+    }
     if record_bytes.is_empty() {
         return Err(JsonIngestionError::Empty);
     }
@@ -101,6 +118,7 @@ pub fn authorize_json_ingestion(
     {
         return Err(JsonIngestionError::InvalidFieldInventory);
     }
+    crate::dataset_schema::validate_record(&dataset_schema, object)?;
     let mut observed_field_ids = object.keys().cloned().collect::<Vec<_>>();
     observed_field_ids.sort();
 
@@ -128,6 +146,7 @@ pub fn authorize_json_ingestion(
         authorization,
         canonical_record_bytes,
         record_sha256,
+        dataset_schema_sha256: expected_dataset_schema_sha256.to_owned(),
         observed_field_ids,
     })
 }

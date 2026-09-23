@@ -104,12 +104,15 @@ deployment; the software can enforce that reviewed decision but cannot make it.
 
 The repository now contains the canonical governance policy and a bounded JSON
 ingestion adapter that derives its top-level field inventory, canonicalizes the
-record and binds its digest to an opaque authorization. It does not validate
-nested business types or implement the complete regulated-data plane above.
-Until pinned schema decoders, key management, tenant-isolated storage, retention
-execution and incident/data-subject workflows are implemented and independently
-qualified, Bloch Data is not admitted to ingest production datasets from an
-exchange or regulated financial institution.
+record and binds its digest to an opaque authorization. Before that governance
+decision, an independently pinned canonical dataset schema validates required
+and optional top-level booleans, bounded integers, byte-bounded strings and
+bounded homogeneous scalar arrays. This v1 structural gate does not validate
+nested or institution-specific business semantics, authenticity, truth or
+legal authority. Until those deeper schemas, key management, tenant-isolated
+storage, retention execution and incident/data-subject workflows are
+implemented and independently qualified, Bloch Data is not admitted to ingest
+production datasets from an exchange or regulated financial institution.
 
 The intended local/off-chain execution and minimized on-chain verification
 boundary is specified in

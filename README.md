@@ -63,9 +63,16 @@ identity, prove finality, activate a network, or authorize asset movement.
 - The Bloch Data JSON ingestion boundary derives the top-level field inventory
   from bounded bytes, rejects duplicate keys recursively and emits canonical
   record bytes with a bound digest instead of trusting caller-declared fields.
+  An independently pinned canonical dataset schema now validates required and
+  optional scalar fields before the governance decision.
 - `bloch-pay-reconciliation`: pinned payment routes and observation sources,
   canonical invoices, deterministic exact/partial/excess/late matching and
-  explicit non-settlement reports that can never authorize credit or funds.
+  exact canonical observations authenticated by domain-separated Ed25519
+  signatures and explicit non-settlement reports that can never authorize
+  credit or funds.
+- `bloch-pay-allocation-store`: Unix-only durable, idempotent allocation of
+  authenticated observations, bound to the exact report, reconciliation policy,
+  observer and observer-policy digests. It never qualifies settlement or credit.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.
@@ -143,7 +150,9 @@ documented in
 [`docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md`](docs/BLOCH-DATA-HYBRID-ARCHITECTURE.md)
 and [`docs/BLOCH-DATA-THREAT-MODEL.md`](docs/BLOCH-DATA-THREAT-MODEL.md).
 The non-custodial Bloch Pay reconciliation boundary is documented in
-[`docs/BLOCH-PAY-RECONCILIATION.md`](docs/BLOCH-PAY-RECONCILIATION.md).
+[`docs/BLOCH-PAY-RECONCILIATION.md`](docs/BLOCH-PAY-RECONCILIATION.md), with the
+authenticated allocation flow in
+[`docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md`](docs/BLOCH-PAY-AUTHENTICATED-ALLOCATION.md).
 
 ## Product boundaries
 

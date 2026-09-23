@@ -1,0 +1,17 @@
+[package]
+name = "bloch-pay-allocation-store"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-pay-reconciliation = { path = "../bloch-pay-reconciliation" }
+hex.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

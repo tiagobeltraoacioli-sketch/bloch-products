@@ -48,6 +48,13 @@ fn policy() -> GovernancePolicy {
                 placement: FieldPlacement::OffChainOnly,
                 required_for: vec![DataOperation::Ingest],
             },
+            FieldRule {
+                field_id: "flags".into(),
+                classification: DataClassification::Internal,
+                semantic_category: SemanticCategory::Operational,
+                placement: FieldPlacement::OffChainOnly,
+                required_for: vec![],
+            },
         ],
         onchain_commitments: vec![],
     }
@@ -69,10 +76,52 @@ fn context() -> JsonIngestionContext {
     }
 }
 
+fn schema() -> DatasetSchema {
+    DatasetSchema {
+        schema: DATASET_SCHEMA_SCHEMA.into(),
+        schema_id: "positions-v1".into(),
+        version: 1,
+        fields: vec![
+            DatasetFieldSchema {
+                field_id: "account_id".into(),
+                required: true,
+                value: DatasetValueSchema::String {
+                    min_bytes: 1,
+                    max_bytes: 64,
+                },
+            },
+            DatasetFieldSchema {
+                field_id: "balance".into(),
+                required: true,
+                value: DatasetValueSchema::Integer {
+                    minimum: 0,
+                    maximum: 1_000_000,
+                },
+            },
+            DatasetFieldSchema {
+                field_id: "flags".into(),
+                required: false,
+                value: DatasetValueSchema::Array {
+                    items: ScalarType::String,
+                    min_items: 1,
+                    max_items: 2,
+                },
+            },
+        ],
+    }
+}
+
+fn authorize(bytes: &[u8]) -> Result<AuthorizedJsonIngestion, JsonIngestionError> {
+    let schema = schema();
+    let schema_bytes = canonical_dataset_schema_bytes(&schema).unwrap();
+    let digest = dataset_schema_sha256(&schema).unwrap();
+    authorize_json_ingestion(&policy(), &context(), &schema_bytes, &digest, bytes)
+}
+
 #[test]
 fn derives_fields_from_exact_payload_and_binds_digest() {
     let bytes = br#"{"account_id":"opaque-1","balance":42}"#;
-    let authorization = authorize_json_ingestion(&policy(), &context(), bytes).unwrap();
+    let authorization = authorize(bytes).unwrap();
     assert_eq!(
         authorization.authorization().operation(),
         DataOperation::Ingest
@@ -84,7 +133,7 @@ fn derives_fields_from_exact_payload_and_binds_digest() {
     assert_eq!(authorization.record_sha256().len(), 66);
 
     let reordered = br#"{"balance":42,"account_id":"opaque-1"}"#;
-    let second = authorize_json_ingestion(&policy(), &context(), reordered).unwrap();
+    let second = authorize(reordered).unwrap();
     assert_eq!(
         second.observed_field_ids(),
         authorization.observed_field_ids()
@@ -108,23 +157,23 @@ fn unknown_missing_forbidden_and_invalid_fields_fail_closed() {
         br#"{"account_id":"x","balance":1,"credential":"secret"}"#.as_slice(),
         br#"{"account_id":"x","balance":1,"Bad Field":true}"#.as_slice(),
     ] {
-        assert!(authorize_json_ingestion(&policy(), &context(), bytes).is_err());
+        assert!(authorize(bytes).is_err());
     }
 }
 
 #[test]
 fn duplicate_nested_keys_trailing_values_arrays_and_oversize_fail_closed() {
     let duplicate = br#"{"account_id":"x","balance":1,"nested":{"x":1,"x":2}}"#;
-    assert!(authorize_json_ingestion(&policy(), &context(), duplicate).is_err());
+    assert!(authorize(duplicate).is_err());
     let trailing = br#"{"account_id":"x","balance":1}{}"#;
-    assert!(authorize_json_ingestion(&policy(), &context(), trailing).is_err());
+    assert!(authorize(trailing).is_err());
     assert!(matches!(
-        authorize_json_ingestion(&policy(), &context(), br#"[1,2]"#),
+        authorize(br#"[1,2]"#),
         Err(JsonIngestionError::NotObject)
     ));
     let oversized = vec![b' '; MAX_JSON_RECORD_BYTES + 1];
     assert!(matches!(
-        authorize_json_ingestion(&policy(), &context(), &oversized),
+        authorize(&oversized),
         Err(JsonIngestionError::TooLarge { .. })
     ));
 }
@@ -134,8 +183,121 @@ fn runtime_context_cannot_cross_tenant_or_key_domain() {
     let bytes = br#"{"account_id":"x","balance":1}"#;
     let mut wrong_tenant = context();
     wrong_tenant.tenant_id = "tenant-b".into();
-    assert!(authorize_json_ingestion(&policy(), &wrong_tenant, bytes).is_err());
+    let schema = schema();
+    let schema_bytes = canonical_dataset_schema_bytes(&schema).unwrap();
+    let digest = dataset_schema_sha256(&schema).unwrap();
+    assert!(
+        authorize_json_ingestion(&policy(), &wrong_tenant, &schema_bytes, &digest, bytes).is_err()
+    );
     let mut wrong_key = context();
     wrong_key.key_domain = "tenant-b-key".into();
-    assert!(authorize_json_ingestion(&policy(), &wrong_key, bytes).is_err());
+    assert!(
+        authorize_json_ingestion(&policy(), &wrong_key, &schema_bytes, &digest, bytes).is_err()
+    );
+}
+
+#[test]
+fn independently_pinned_schema_enforces_types_bounds_and_canonical_output() {
+    let schema = schema();
+    let schema_bytes = canonical_dataset_schema_bytes(&schema).unwrap();
+    let digest = dataset_schema_sha256(&schema).unwrap();
+    let authorized = authorize_json_ingestion(
+        &policy(),
+        &context(),
+        &schema_bytes,
+        &digest,
+        br#"{"balance":7,"account_id":"conta"}"#,
+    )
+    .unwrap();
+    assert_eq!(authorized.dataset_schema_sha256(), digest);
+    assert_eq!(
+        authorized.canonical_record_bytes(),
+        br#"{"account_id":"conta","balance":7}"#
+    );
+
+    for record in [
+        br#"{"account_id":1,"balance":7}"#.as_slice(),
+        br#"{"account_id":"","balance":7}"#.as_slice(),
+        br#"{"account_id":"conta","balance":-1}"#.as_slice(),
+        br#"{"account_id":"conta","balance":7.0}"#.as_slice(),
+        br#"{"account_id":"conta","balance":7,"nested":{}}"#.as_slice(),
+        br#"{"account_id":null,"balance":7}"#.as_slice(),
+        br#"{"account_id":"conta","balance":7,"flags":[]}"#.as_slice(),
+        br#"{"account_id":"conta","balance":7,"flags":["a",1]}"#.as_slice(),
+        br#"{"account_id":"conta","balance":7,"flags":["a","b","c"]}"#.as_slice(),
+    ] {
+        assert!(
+            authorize_json_ingestion(&policy(), &context(), &schema_bytes, &digest, record)
+                .is_err()
+        );
+    }
+    assert!(
+        authorize_json_ingestion(
+            &policy(),
+            &context(),
+            &schema_bytes,
+            &digest,
+            br#"{"account_id":"conta","balance":7,"flags":["audited"]}"#,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn schema_parser_rejects_wrong_pin_noncanonical_duplicate_unknown_and_invalid_bounds() {
+    let valid_schema = schema();
+    let bytes = canonical_dataset_schema_bytes(&valid_schema).unwrap();
+    let digest = dataset_schema_sha256(&valid_schema).unwrap();
+    assert_eq!(parse_dataset_schema(&bytes, &digest).unwrap(), valid_schema);
+    assert_eq!(
+        parse_dataset_schema(&bytes, &hash('b')),
+        Err(DatasetSchemaError::SchemaDigestMismatch)
+    );
+    let mut noncanonical = bytes.clone();
+    noncanonical.push(b'\n');
+    assert_eq!(
+        parse_dataset_schema(&noncanonical, &digest),
+        Err(DatasetSchemaError::NonCanonicalSchema)
+    );
+    let text = String::from_utf8(bytes).unwrap();
+    for malformed in [
+        text.replacen("\"schemaId\":", "\"schemaId\":\"evil\",\"schemaId\":", 1),
+        text.replacen("{", "{\"unknown\":true,", 1),
+    ] {
+        assert!(matches!(
+            parse_dataset_schema(malformed.as_bytes(), &digest),
+            Err(DatasetSchemaError::InvalidJson(_))
+        ));
+    }
+
+    let mut invalid = schema();
+    invalid.fields[1].value = DatasetValueSchema::Integer {
+        minimum: 10,
+        maximum: 9,
+    };
+    assert_eq!(
+        canonical_dataset_schema_bytes(&invalid),
+        Err(DatasetSchemaError::InvalidSchema("integerBounds"))
+    );
+
+    let oversized = vec![b' '; MAX_DATASET_SCHEMA_BYTES + 1];
+    assert!(matches!(
+        parse_dataset_schema(&oversized, &digest),
+        Err(DatasetSchemaError::TooLarge { .. })
+    ));
+
+    let mut wrong_identity = schema();
+    wrong_identity.schema_id = "positions-v2".into();
+    let wrong_bytes = canonical_dataset_schema_bytes(&wrong_identity).unwrap();
+    let wrong_digest = dataset_schema_sha256(&wrong_identity).unwrap();
+    assert!(
+        authorize_json_ingestion(
+            &policy(),
+            &context(),
+            &wrong_bytes,
+            &wrong_digest,
+            br#"{"account_id":"conta","balance":7}"#,
+        )
+        .is_err()
+    );
 }
