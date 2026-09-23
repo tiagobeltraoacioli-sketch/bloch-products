@@ -29,6 +29,8 @@ pub enum VerifyError {
     InvalidField(&'static str),
     #[error("trust policy digest mismatch")]
     TrustPolicyDigestMismatch,
+    #[error("network identity digest mismatch")]
+    NetworkIdentityDigestMismatch,
     #[error("untrusted or duplicated observer: {0}")]
     UntrustedObserver(String),
     #[error("invalid observation signature: {0}")]
@@ -285,6 +287,29 @@ pub fn parse_bundle(bytes: &[u8]) -> Result<EvidenceBundle, VerifyError> {
     let bundle: EvidenceBundle = parse_strict_json(bytes)?;
     validate_shape(&bundle)?;
     Ok(bundle)
+}
+
+pub fn parse_network_identity(bytes: &[u8]) -> Result<NetworkIdentity, VerifyError> {
+    safe_size(bytes)?;
+    let identity: NetworkIdentity = parse_strict_json(bytes)?;
+    validate_network_identity(&identity, "networkIdentity")?;
+    Ok(identity)
+}
+
+pub fn network_identity_sha256(identity: &NetworkIdentity) -> Result<String, VerifyError> {
+    validate_network_identity(identity, "networkIdentity")?;
+    canonical_digest(identity)
+}
+
+pub fn verify_network_identity_sha256(
+    identity: &NetworkIdentity,
+    expected_sha256: &str,
+) -> Result<(), VerifyError> {
+    hash32(expected_sha256, "expectedNetworkSha256")?;
+    if network_identity_sha256(identity)? != expected_sha256 {
+        return Err(VerifyError::NetworkIdentityDigestMismatch);
+    }
+    Ok(())
 }
 
 pub fn parse_signed_bundle(bytes: &[u8]) -> Result<SignedEvidenceBundle, VerifyError> {
@@ -1206,6 +1231,17 @@ fn validate_shape(bundle: &EvidenceBundle) -> Result<(), VerifyError> {
     Ok(())
 }
 
+pub(crate) fn validate_network_identity(
+    identity: &NetworkIdentity,
+    field: &'static str,
+) -> Result<(), VerifyError> {
+    if !valid_identifier(&identity.network) || identity.chain_id == 0 {
+        return Err(VerifyError::InvalidField(field));
+    }
+    hash32(&identity.genesis_hash, field)?;
+    Ok(())
+}
+
 fn validate_signed_shape(bundle: &SignedEvidenceBundle) -> Result<(), VerifyError> {
     if bundle.schema != SIGNED_SCHEMA {
         return Err(VerifyError::InvalidField("schema"));
@@ -1797,6 +1833,29 @@ mod tests {
         assert!(matches!(
             parse_json_rpc_responses(duplicate_nested),
             Err(VerifyError::InvalidJson(message)) if message.contains("duplicate JSON object key")
+        ));
+    }
+
+    #[test]
+    fn network_identity_is_strict_and_bound_to_an_external_digest() {
+        let identity = NetworkIdentity {
+            network: "bloch-l2".into(),
+            chain_id: 700_771,
+            genesis_hash: format!("0x{}", "a".repeat(64)),
+        };
+        let bytes = serde_json::to_vec(&identity).unwrap();
+        let parsed = parse_network_identity(&bytes).unwrap();
+        let digest = network_identity_sha256(&parsed).unwrap();
+        verify_network_identity_sha256(&parsed, &digest).unwrap();
+        assert_eq!(
+            verify_network_identity_sha256(&parsed, &format!("0x{}", "f".repeat(64))).unwrap_err(),
+            VerifyError::NetworkIdentityDigestMismatch
+        );
+
+        let duplicate = br#"{"network":"bloch-l2","chainId":700771,"chainId":4,"genesisHash":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(matches!(
+            parse_network_identity(duplicate),
+            Err(VerifyError::InvalidJson(_))
         ));
     }
 }

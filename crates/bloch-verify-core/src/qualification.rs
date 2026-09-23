@@ -4,7 +4,10 @@
 //! authenticate yet. A supplied claim is not a passed gate: only a named,
 //! implemented verifier may produce a passing outcome.
 
-use crate::{AssessmentReport, NetworkIdentity, VerifyError};
+use crate::{
+    AssessmentReport, NetworkIdentity, VerifyError, network_identity_sha256,
+    validate_network_identity,
+};
 use serde::{Deserialize, Serialize};
 
 pub const QUALIFICATION_POLICY_SCHEMA: &str = "bloch.verify.production-qualification-policy.v1";
@@ -61,6 +64,7 @@ pub struct ProductionQualificationReport {
     pub schema: String,
     pub profile_id: String,
     pub expected_network: NetworkIdentity,
+    pub expected_network_sha256: String,
     pub assessed_network: NetworkIdentity,
     pub source_assessment_schema: String,
     pub gates: Vec<QualificationGateOutcome>,
@@ -250,37 +254,13 @@ pub fn evaluate_current_production_gates(
         schema: QUALIFICATION_REPORT_SCHEMA.into(),
         profile_id: policy.profile_id,
         expected_network: policy.expected_network,
+        expected_network_sha256: network_identity_sha256(expected_network)?,
         assessed_network: assessed_network.clone(),
         source_assessment_schema: assessment.schema.into(),
         gates,
         production_qualified,
         reasons,
     })
-}
-
-fn validate_network_identity(
-    identity: &NetworkIdentity,
-    field: &'static str,
-) -> Result<(), VerifyError> {
-    let valid_name = (3..=64).contains(&identity.network.len())
-        && identity.network.is_ascii()
-        && identity.network.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
-        });
-    let valid_genesis = identity
-        .genesis_hash
-        .strip_prefix("0x")
-        .is_some_and(|value| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                && value.bytes().any(|byte| byte != b'0')
-        });
-    if !valid_name || identity.chain_id == 0 || !valid_genesis {
-        return Err(VerifyError::InvalidField(field));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -338,6 +318,10 @@ mod tests {
         assert!(!qualification.production_qualified);
         assert_eq!(qualification.assessed_network.chain_id, 4);
         assert_eq!(qualification.expected_network.chain_id, 700_771);
+        assert_eq!(
+            qualification.expected_network_sha256,
+            network_identity_sha256(&production_network()).unwrap()
+        );
     }
 
     #[test]

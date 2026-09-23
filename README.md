@@ -57,7 +57,9 @@ bounded structural header-linkage verifier; it deliberately does not claim
 consensus finality.
 [`docs/PRODUCTION-QUALIFICATION-GATES.md`](docs/PRODUCTION-QUALIFICATION-GATES.md)
 defines the chain- and genesis-bound production profile and records unavailable
-verifiers without accepting caller-provided success claims.
+verifiers without accepting caller-provided success claims. The
+`bloch-verify-qualify` CLI pins the reviewed network identity by an externally
+retained canonical SHA-256.
 
 `--require-production-qualified` intentionally exits nonzero in this version.
 Real-world organizational independence and authenticated consensus
