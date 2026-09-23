@@ -10,6 +10,8 @@ bloch-local-state-coordination = { path = "../bloch-local-state-coordination" }
 bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
 bloch-local-state-remote-session = { path = "../bloch-local-state-remote-session" }
 bloch-trusted-time = { path = "../bloch-trusted-time" }
+bloch-trusted-time-boundary-store = { path = "../bloch-trusted-time-boundary-store" }
+bloch-trusted-time-session = { path = "../bloch-trusted-time-session" }
 thiserror.workspace = true
 
 [dev-dependencies]

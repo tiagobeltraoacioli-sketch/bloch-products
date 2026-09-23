@@ -60,8 +60,10 @@ will follow working implementations and retained evidence.
    coordinates cooperating admission and writer processes. Transport-neutral
    in-process startup and writer/recovery compositions plus a single-host
    durable CAS reference core now exist. Threshold-authenticated,
-   audience-bound trusted-time capabilities and bounded ingress also exist. A
-   qualified network transport, rollback-resistant time-boundary store,
+   audience-bound trusted-time capabilities, fresh bounded acquisition, a
+   single-host monotonic-boundary reference store, bounded cursor ingress and
+   threshold caller authorization for exact CAS requests also exist. A
+   qualified network transport, independent rollback-resistant time root,
    suspend/resume qualification, replicated remote deployment, operational
    trust roots, encryption and multi-host HA remain open.
 7. Read-only route risk comparison.

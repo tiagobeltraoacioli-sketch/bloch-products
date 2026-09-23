@@ -8,6 +8,7 @@ use bloch_local_state_cursor::{CheckpointCursor, parse_cursor};
 use bloch_local_state_remote_cursor::{
     RemoteCursorCasDecision, RemoteCursorCasMode, ValidatedRemoteCursorCasRequest,
 };
+use bloch_local_state_remote_cursor_caller_auth::VerifiedRemoteCursorCasCallerAuthorization;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::fs::{File, Metadata, OpenOptions};
@@ -18,7 +19,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub const CONTROL_PLANE_STATE_SCHEMA: &str = "bloch.products.remote-cursor-control-plane-state.v1";
+pub const CONTROL_PLANE_STATE_SCHEMA: &str = "bloch.products.remote-cursor-control-plane-state.v2";
 pub const MAX_RECORDED_REQUESTS: usize = 4096;
 const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
 #[cfg(unix)]
@@ -42,6 +43,7 @@ struct DurableState {
     state_identity: String,
     remote_cursor_policy_sha256: String,
     signature_domain: String,
+    caller_authorization_policy_sha256: String,
     current_cursor: Option<CheckpointCursor>,
     decisions: Vec<RecordedDecision>,
 }
@@ -87,6 +89,10 @@ pub enum ControlPlaneError {
     InvalidState,
     #[error("request ID was already used for different request bytes")]
     RequestIdConflict,
+    #[error("caller authorization does not bind this store and exact request")]
+    CallerAuthorizationMismatch,
+    #[error("caller authorization monotonic deadline has expired")]
+    CallerAuthorizationExpired,
     #[error("control-plane request history is full")]
     HistoryFull,
     #[error("control-plane store is busy")]
@@ -109,11 +115,13 @@ pub fn provision_control_plane_store(
     state_identity: &str,
     remote_cursor_policy_sha256: &str,
     signature_domain: &str,
+    caller_authorization_policy_sha256: &str,
 ) -> Result<(), ControlPlaneError> {
     use std::os::unix::fs::DirBuilderExt;
     if !valid_id(state_identity)
         || !valid_sha256(remote_cursor_policy_sha256)
         || !valid_id(signature_domain)
+        || !valid_sha256(caller_authorization_policy_sha256)
     {
         return Err(ControlPlaneError::InvalidInput);
     }
@@ -138,6 +146,7 @@ pub fn provision_control_plane_store(
         state_identity: state_identity.into(),
         remote_cursor_policy_sha256: remote_cursor_policy_sha256.into(),
         signature_domain: signature_domain.into(),
+        caller_authorization_policy_sha256: caller_authorization_policy_sha256.into(),
         current_cursor: None,
         decisions: Vec::new(),
     };
@@ -158,27 +167,34 @@ pub fn provision_control_plane_store(
     _state_identity: &str,
     _remote_cursor_policy_sha256: &str,
     _signature_domain: &str,
+    _caller_authorization_policy_sha256: &str,
 ) -> Result<(), ControlPlaneError> {
     Err(ControlPlaneError::UnsupportedPlatform)
 }
 
-/// Applies one already-validated request under the durable store lock.
+/// Applies one already-validated and threshold-authorized request under the
+/// durable store lock.
 ///
-/// The returned material is unsigned. Callers may submit its exact decision to
-/// external authorities together with the original canonical request bytes.
+/// The opaque authorization must bind the exact canonical request and the
+/// caller-policy pin provisioned with this store. The returned material is
+/// unsigned; callers may submit its exact decision to external authorities
+/// together with the original canonical request bytes.
 #[cfg(unix)]
 pub fn apply_request(
     store: &Path,
     expected_state_identity: &str,
     request: &ValidatedRemoteCursorCasRequest,
+    authorization: &VerifiedRemoteCursorCasCallerAuthorization,
 ) -> Result<ControlPlaneDecision, ControlPlaneError> {
     if !valid_id(expected_state_identity) || request.state_identity() != expected_state_identity {
         return Err(ControlPlaneError::InvalidInput);
     }
+    authorization
+        .ensure_monotonic_freshness()
+        .map_err(|_| ControlPlaneError::CallerAuthorizationExpired)?;
     let directory = open_store(store)?;
     let _lock = StoreLock::acquire(&directory)?;
     verify_store_path(store, &directory)?;
-    cleanup_stale_temporary_files(&directory)?;
     let mut state = read_state(&directory)?.ok_or(ControlPlaneError::StateMissing)?;
     validate_state(&state)?;
     if state.state_identity != expected_state_identity {
@@ -189,6 +205,18 @@ pub fn apply_request(
     {
         return Err(ControlPlaneError::InvalidInput);
     }
+    if state.caller_authorization_policy_sha256 != authorization.caller_policy_sha256()
+        || authorization.remote_cursor_policy_sha256() != request.remote_cursor_policy_sha256()
+        || authorization.state_identity() != request.state_identity()
+        || authorization.request_sha256() != request.request_sha256()
+        || authorization.canonical_request() != request.canonical_bytes()
+    {
+        return Err(ControlPlaneError::CallerAuthorizationMismatch);
+    }
+    authorization
+        .ensure_monotonic_freshness()
+        .map_err(|_| ControlPlaneError::CallerAuthorizationExpired)?;
+    cleanup_stale_temporary_files(&directory)?;
     if let Some(recorded) = state
         .decisions
         .iter()
@@ -238,9 +266,16 @@ pub fn apply_request(
         decision: decision_value,
         resulting_cursor,
     };
+    authorization
+        .ensure_monotonic_freshness()
+        .map_err(|_| ControlPlaneError::CallerAuthorizationExpired)?;
     state.decisions.push(recorded.clone());
     let bytes = serde_json::to_vec(&state).map_err(|_| ControlPlaneError::InvalidState)?;
-    atomic_replace(&directory, &bytes)?;
+    atomic_replace_guarded(&directory, &bytes, || {
+        authorization
+            .ensure_monotonic_freshness()
+            .map_err(|_| ControlPlaneError::CallerAuthorizationExpired)
+    })?;
     let published = read_state(&directory)?.ok_or(ControlPlaneError::StateMissing)?;
     if published != state {
         return Err(ControlPlaneError::InvalidState);
@@ -254,6 +289,7 @@ pub fn apply_request(
     _store: &Path,
     _expected_state_identity: &str,
     _request: &ValidatedRemoteCursorCasRequest,
+    _authorization: &VerifiedRemoteCursorCasCallerAuthorization,
 ) -> Result<ControlPlaneDecision, ControlPlaneError> {
     Err(ControlPlaneError::UnsupportedPlatform)
 }
@@ -317,6 +353,7 @@ fn validate_state(state: &DurableState) -> Result<(), ControlPlaneError> {
         || !valid_id(&state.state_identity)
         || !valid_sha256(&state.remote_cursor_policy_sha256)
         || !valid_id(&state.signature_domain)
+        || !valid_sha256(&state.caller_authorization_policy_sha256)
         || state.decisions.len() > MAX_RECORDED_REQUESTS
         || state
             .current_cursor
@@ -565,6 +602,18 @@ fn read_state(directory: &File) -> Result<Option<DurableState>, ControlPlaneErro
 
 #[cfg(unix)]
 fn atomic_replace(directory: &File, bytes: &[u8]) -> Result<(), ControlPlaneError> {
+    atomic_replace_guarded(directory, bytes, || Ok(()))
+}
+
+#[cfg(unix)]
+fn atomic_replace_guarded<F>(
+    directory: &File,
+    bytes: &[u8],
+    freshness_guard: F,
+) -> Result<(), ControlPlaneError>
+where
+    F: Fn() -> Result<(), ControlPlaneError>,
+{
     use std::os::fd::{AsRawFd, FromRawFd};
     if bytes.is_empty() || bytes.len() as u64 > MAX_STATE_BYTES {
         return Err(ControlPlaneError::InvalidState);
@@ -591,6 +640,7 @@ fn atomic_replace(directory: &File, bytes: &[u8]) -> Result<(), ControlPlaneErro
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        freshness_guard()?;
         if unsafe {
             libc::renameat(
                 directory.as_raw_fd(),

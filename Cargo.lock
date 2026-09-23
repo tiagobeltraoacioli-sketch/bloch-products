@@ -278,11 +278,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-remote-cursor-caller-auth"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-cursor",
+ "bloch-local-state-remote-cursor",
+ "bloch-local-state-store",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-remote-cursor-control-plane"
 version = "0.1.0"
 dependencies = [
  "bloch-local-state-cursor",
  "bloch-local-state-remote-cursor",
+ "bloch-local-state-remote-cursor-caller-auth",
  "bloch-local-state-store",
  "ed25519-dalek",
  "getrandom",
@@ -321,6 +337,8 @@ dependencies = [
  "bloch-local-state-store",
  "bloch-pay-adjustments",
  "bloch-trusted-time",
+ "bloch-trusted-time-boundary-store",
+ "bloch-trusted-time-session",
  "ed25519-dalek",
  "hex",
  "serde",
@@ -409,6 +427,29 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-trusted-time-boundary-store"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "getrandom",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-trusted-time-session"
+version = "0.1.0"
+dependencies = [
+ "bloch-trusted-time",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
  "thiserror",
 ]
 

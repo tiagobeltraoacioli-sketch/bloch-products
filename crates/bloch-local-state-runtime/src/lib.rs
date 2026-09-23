@@ -12,6 +12,14 @@ use bloch_local_state_remote_session::{
     fetch_verified_remote_cursor_with_trusted_time,
 };
 use bloch_trusted_time::VerifiedTrustedTime;
+use bloch_trusted_time_boundary_store::{
+    BoundaryStoreError, TrustedTimeBoundaryAudience, advance_trusted_time_boundary,
+    load_trusted_time_boundary,
+};
+use bloch_trusted_time_session::{
+    MonotonicDeadlineRead as TrustedTimeDeadlineRead, TrustedTimeAcquisitionError,
+    TrustedTimeFetchRequest, acquire_verified_trusted_time,
+};
 use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
@@ -43,6 +51,13 @@ pub struct PayStartupMaterials<'a> {
     pub local: LocalAdmissionMaterials<'a>,
 }
 
+pub struct TrustedTimeStartupMaterials<'a> {
+    pub policy_bytes: &'a [u8],
+    pub expected_policy_sha256: &'a str,
+    pub boundary_store: &'a Path,
+    pub timeout: Duration,
+}
+
 #[derive(Debug, Error)]
 pub enum StartupRuntimeError<E> {
     #[error("local startup coordination failed")]
@@ -55,6 +70,27 @@ pub enum StartupRuntimeError<E> {
 
 enum StartupOperationError<E> {
     Remote(FetchSessionError<E>),
+    Admission(AdmissionError),
+}
+
+#[derive(Debug, Error)]
+pub enum FreshStartupRuntimeError<TE, CE> {
+    #[error("local startup coordination failed")]
+    Coordination(#[source] CoordinationError),
+    #[error("trusted-time boundary store failed")]
+    TrustedTimeBoundary(#[source] BoundaryStoreError),
+    #[error("fresh trusted-time acquisition failed")]
+    TrustedTimeAcquisition(#[source] TrustedTimeAcquisitionError<TE>),
+    #[error("remote cursor fetch session failed")]
+    Remote(#[source] FetchSessionError<CE>),
+    #[error("local startup admission failed")]
+    Admission(#[source] AdmissionError),
+}
+
+enum FreshStartupOperationError<TE, CE> {
+    TrustedTimeBoundary(BoundaryStoreError),
+    TrustedTimeAcquisition(TrustedTimeAcquisitionError<TE>),
+    Remote(FetchSessionError<CE>),
     Admission(AdmissionError),
 }
 
@@ -109,6 +145,44 @@ where
     map_coordinated(result)
 }
 
+/// Acquires fresh threshold-authenticated time, durably advances its rollback
+/// floor, and starts Bloch Data under one local coordination capability.
+/// Every cooperating boundary updater for this audience must use the same
+/// coordination directory.
+pub fn start_data_with_fresh_trusted_time<TE, TR, TF, CE, CF>(
+    materials: DataStartupMaterials<'_>,
+    trusted_time_materials: TrustedTimeStartupMaterials<'_>,
+    trusted_time_transport: TF,
+    remote_cursor_transport: CF,
+) -> Result<AdmittedLifecycleState, FreshStartupRuntimeError<TE, CE>>
+where
+    TR: TrustedTimeDeadlineRead<Error = TE>,
+    TF: for<'session> FnOnce(TrustedTimeFetchRequest<'session>) -> Result<TR, TE>,
+    CF: for<'session> FnOnce(RemoteCursorFetchRequest<'session>) -> Result<Vec<u8>, CE>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        let trusted_time = acquire_and_advance_trusted_time(
+            &materials.remote,
+            &trusted_time_materials,
+            trusted_time_transport,
+        )?;
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            &trusted_time,
+            trusted_time_materials.expected_policy_sha256,
+            remote_cursor_transport,
+        )
+        .map_err(FreshStartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_data_lifecycle(DataLifecycleAdmission {
+            startup,
+            lifecycle_policy_bytes: materials.lifecycle_policy_bytes,
+        })
+        .map_err(FreshStartupOperationError::Admission)
+    });
+    map_fresh_coordinated(result)
+}
+
 /// Compatibility-only startup using the host wall clock for remote freshness.
 /// Use [`start_pay_with_trusted_time`] for the qualified trusted-time path.
 pub fn start_pay<E, F>(
@@ -154,6 +228,41 @@ where
     map_coordinated(result)
 }
 
+/// Acquires fresh threshold-authenticated time, durably advances its rollback
+/// floor, and starts Bloch Pay under one local coordination capability.
+/// Every cooperating boundary updater for this audience must use the same
+/// coordination directory.
+pub fn start_pay_with_fresh_trusted_time<TE, TR, TF, CE, CF>(
+    materials: PayStartupMaterials<'_>,
+    trusted_time_materials: TrustedTimeStartupMaterials<'_>,
+    trusted_time_transport: TF,
+    remote_cursor_transport: CF,
+) -> Result<AdmittedAdjustmentState, FreshStartupRuntimeError<TE, CE>>
+where
+    TR: TrustedTimeDeadlineRead<Error = TE>,
+    TF: for<'session> FnOnce(TrustedTimeFetchRequest<'session>) -> Result<TR, TE>,
+    CF: for<'session> FnOnce(RemoteCursorFetchRequest<'session>) -> Result<Vec<u8>, CE>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        let trusted_time = acquire_and_advance_trusted_time(
+            &materials.remote,
+            &trusted_time_materials,
+            trusted_time_transport,
+        )?;
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            &trusted_time,
+            trusted_time_materials.expected_policy_sha256,
+            remote_cursor_transport,
+        )
+        .map_err(FreshStartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_pay_adjustment(PayAdjustmentAdmission { startup })
+            .map_err(FreshStartupOperationError::Admission)
+    });
+    map_fresh_coordinated(result)
+}
+
 fn fetch<E, F>(
     materials: &RemoteFetchMaterials<'_>,
     transport: F,
@@ -168,6 +277,42 @@ where
         materials.timeout,
         transport,
     )
+}
+
+fn acquire_and_advance_trusted_time<TE, TR, TF, CE>(
+    remote: &RemoteFetchMaterials<'_>,
+    trusted: &TrustedTimeStartupMaterials<'_>,
+    transport: TF,
+) -> Result<VerifiedTrustedTime, FreshStartupOperationError<TE, CE>>
+where
+    TR: TrustedTimeDeadlineRead<Error = TE>,
+    TF: for<'session> FnOnce(TrustedTimeFetchRequest<'session>) -> Result<TR, TE>,
+{
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: trusted.expected_policy_sha256,
+        state_identity: remote.expected_state_identity,
+        remote_cursor_policy_sha256: remote.expected_policy_sha256,
+    };
+    let retained = load_trusted_time_boundary(trusted.boundary_store, audience)
+        .map_err(FreshStartupOperationError::TrustedTimeBoundary)?;
+    let verified = acquire_verified_trusted_time(
+        trusted.policy_bytes,
+        trusted.expected_policy_sha256,
+        remote.expected_state_identity,
+        remote.expected_policy_sha256,
+        Some(&retained),
+        trusted.timeout,
+        transport,
+    )
+    .map_err(FreshStartupOperationError::TrustedTimeAcquisition)?;
+    let next = verified.rollback_boundary().map_err(|error| {
+        FreshStartupOperationError::TrustedTimeAcquisition(
+            TrustedTimeAcquisitionError::Authentication(error),
+        )
+    })?;
+    advance_trusted_time_boundary(trusted.boundary_store, audience, &next)
+        .map_err(FreshStartupOperationError::TrustedTimeBoundary)?;
+    Ok(verified)
 }
 
 fn fetch_with_trusted_time<E, F>(
@@ -200,6 +345,26 @@ fn map_coordinated<T, E>(
         }
         CoordinatedError::Operation(StartupOperationError::Admission(error)) => {
             StartupRuntimeError::Admission(error)
+        }
+    })
+}
+
+fn map_fresh_coordinated<T, TE, CE>(
+    result: Result<T, CoordinatedError<FreshStartupOperationError<TE, CE>>>,
+) -> Result<T, FreshStartupRuntimeError<TE, CE>> {
+    result.map_err(|error| match error {
+        CoordinatedError::Coordination(error) => FreshStartupRuntimeError::Coordination(error),
+        CoordinatedError::Operation(FreshStartupOperationError::TrustedTimeBoundary(error)) => {
+            FreshStartupRuntimeError::TrustedTimeBoundary(error)
+        }
+        CoordinatedError::Operation(FreshStartupOperationError::TrustedTimeAcquisition(error)) => {
+            FreshStartupRuntimeError::TrustedTimeAcquisition(error)
+        }
+        CoordinatedError::Operation(FreshStartupOperationError::Remote(error)) => {
+            FreshStartupRuntimeError::Remote(error)
+        }
+        CoordinatedError::Operation(FreshStartupOperationError::Admission(error)) => {
+            FreshStartupRuntimeError::Admission(error)
         }
     })
 }

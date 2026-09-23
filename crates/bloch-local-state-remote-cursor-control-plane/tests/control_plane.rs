@@ -6,11 +6,17 @@ use bloch_local_state_remote_cursor::{
     RemoteCursorCasRequestParameters, RemoteCursorPolicy, ValidatedRemoteCursorCasRequest,
     create_remote_cursor_cas_request, parse_remote_cursor_cas_request, remote_cursor_policy_sha256,
 };
+use bloch_local_state_remote_cursor_caller_auth::{
+    CALLER_AUTH_POLICY_SCHEMA, CallerAuthority, CallerAuthorizationPolicy, CallerSignature,
+    VerifiedRemoteCursorCasCallerAuthorization, caller_authorization_policy_sha256,
+    caller_authorization_signature_message, create_caller_authorization,
+    verify_caller_authorization,
+};
 use bloch_local_state_remote_cursor_control_plane::{
     ControlPlaneError, apply_request, load_current_cursor, provision_control_plane_store,
 };
 use bloch_local_state_store::{StateRoot, write_state};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::OpenOptions;
@@ -87,12 +93,18 @@ fn create_once_cas_and_replay_are_durable_and_idempotent() {
         &pin,
     );
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &unprovisioned),
+        authorized_apply(&control.0, &unprovisioned),
         Err(ControlPlaneError::StateMissing)
     ));
     provision(&control.0, &policy, &pin);
     assert!(matches!(
-        provision_control_plane_store(&control.0, IDENTITY, &pin, &policy.signature_domain),
+        provision_control_plane_store(
+            &control.0,
+            IDENTITY,
+            &pin,
+            &policy.signature_domain,
+            &caller_pin(&pin),
+        ),
         Err(ControlPlaneError::AlreadyProvisioned)
     ));
     let mut wrong_policy = policy.clone();
@@ -107,7 +119,7 @@ fn create_once_cas_and_replay_are_durable_and_idempotent() {
         &wrong_pin,
     );
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &wrong_policy_request),
+        authorized_apply(&control.0, &wrong_policy_request),
         Err(ControlPlaneError::InvalidInput)
     ));
     let bootstrap = request(
@@ -118,15 +130,12 @@ fn create_once_cas_and_replay_are_durable_and_idempotent() {
         &policy,
         &pin,
     );
-    let accepted = apply_request(&control.0, IDENTITY, &bootstrap).unwrap();
+    let accepted = authorized_apply(&control.0, &bootstrap).unwrap();
     assert_eq!(accepted.decision(), &RemoteCursorCasDecision::Accepted);
     assert_eq!(accepted.resulting_cursor(), Some(&chain.cursor0));
     assert!(!accepted.signed_receipt_created());
     let before = fs::read(control.0.join("state.json")).unwrap();
-    assert_eq!(
-        apply_request(&control.0, IDENTITY, &bootstrap).unwrap(),
-        accepted
-    );
+    assert_eq!(authorized_apply(&control.0, &bootstrap).unwrap(), accepted);
     assert_eq!(fs::read(control.0.join("state.json")).unwrap(), before);
 
     let advance = request(
@@ -137,7 +146,7 @@ fn create_once_cas_and_replay_are_durable_and_idempotent() {
         &policy,
         &pin,
     );
-    let accepted = apply_request(&control.0, IDENTITY, &advance).unwrap();
+    let accepted = authorized_apply(&control.0, &advance).unwrap();
     assert_eq!(accepted.decision(), &RemoteCursorCasDecision::Accepted);
     assert_eq!(
         load_current_cursor(&control.0, IDENTITY, &pin, &policy.signature_domain).unwrap(),
@@ -145,10 +154,78 @@ fn create_once_cas_and_replay_are_durable_and_idempotent() {
     );
     fs::remove_file(control.0.join("state.json")).unwrap();
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &advance),
+        authorized_apply(&control.0, &advance),
         Err(ControlPlaneError::StateMissing)
     ));
     assert!(!control.0.join("state.json").exists());
+}
+
+#[test]
+fn exact_caller_capability_is_required_before_mutation() {
+    let control = Temp::new("caller-capability");
+    let chain = Chain::new(b"one", 25);
+    let (policy, pin) = policy();
+    provision(&control.0, &policy, &pin);
+    let authorized = request(
+        None,
+        &chain.cursor0,
+        &chain.root0,
+        "authorized-request",
+        &policy,
+        &pin,
+    );
+    let substituted = request(
+        None,
+        &chain.cursor0,
+        &chain.root0,
+        "substituted-request",
+        &policy,
+        &pin,
+    );
+    let capability = caller_authorization(&authorized);
+    let stale = control
+        .0
+        .join(".state.json.tmp-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    fs::write(&stale, b"untrusted-leftover").unwrap();
+    fs::set_permissions(&stale, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        apply_request(&control.0, IDENTITY, &substituted, &capability),
+        Err(ControlPlaneError::CallerAuthorizationMismatch)
+    ));
+    assert!(
+        stale.exists(),
+        "cleanup must follow exact authorization binding"
+    );
+    assert_eq!(
+        load_current_cursor(&control.0, IDENTITY, &pin, &policy.signature_domain).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn expired_monotonic_capability_cannot_mutate() {
+    let control = Temp::new("expired-caller-capability");
+    let chain = Chain::new(b"one", 26);
+    let (policy, pin) = policy();
+    provision(&control.0, &policy, &pin);
+    let request = request(
+        None,
+        &chain.cursor0,
+        &chain.root0,
+        "short-lived-request",
+        &policy,
+        &pin,
+    );
+    let capability = caller_authorization_at(&request, 249);
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    assert!(matches!(
+        apply_request(&control.0, IDENTITY, &request, &capability),
+        Err(ControlPlaneError::CallerAuthorizationExpired)
+    ));
+    assert_eq!(
+        load_current_cursor(&control.0, IDENTITY, &pin, &policy.signature_domain).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -166,7 +243,7 @@ fn conflict_is_persisted_and_request_id_substitution_fails() {
         &policy,
         &pin,
     );
-    apply_request(&control.0, IDENTITY, &bootstrap).unwrap();
+    authorized_apply(&control.0, &bootstrap).unwrap();
     let advance = request(
         Some(&chain.cursor0),
         &chain.cursor1,
@@ -175,7 +252,7 @@ fn conflict_is_persisted_and_request_id_substitution_fails() {
         &policy,
         &pin,
     );
-    apply_request(&control.0, IDENTITY, &advance).unwrap();
+    authorized_apply(&control.0, &advance).unwrap();
     let stale = request(
         Some(&chain.cursor0),
         &fork.cursor1,
@@ -184,7 +261,7 @@ fn conflict_is_persisted_and_request_id_substitution_fails() {
         &policy,
         &pin,
     );
-    let refused = apply_request(&control.0, IDENTITY, &stale).unwrap();
+    let refused = authorized_apply(&control.0, &stale).unwrap();
     assert_eq!(
         refused.decision(),
         &RemoteCursorCasDecision::Refused {
@@ -192,10 +269,7 @@ fn conflict_is_persisted_and_request_id_substitution_fails() {
         }
     );
     assert!(refused.resulting_cursor().is_none());
-    assert_eq!(
-        apply_request(&control.0, IDENTITY, &stale).unwrap(),
-        refused
-    );
+    assert_eq!(authorized_apply(&control.0, &stale).unwrap(), refused);
 
     let substituted = request(
         Some(&chain.cursor0),
@@ -206,7 +280,7 @@ fn conflict_is_persisted_and_request_id_substitution_fails() {
         &pin,
     );
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &substituted),
+        authorized_apply(&control.0, &substituted),
         Err(ControlPlaneError::RequestIdConflict)
     ));
 }
@@ -226,7 +300,7 @@ fn concurrent_competing_cas_has_one_acceptance_and_one_refusal() {
         &policy,
         &pin,
     );
-    apply_request(&control.0, IDENTITY, &bootstrap).unwrap();
+    authorized_apply(&control.0, &bootstrap).unwrap();
     let left = request(
         Some(&chain.cursor0),
         &chain.cursor1,
@@ -250,7 +324,7 @@ fn concurrent_competing_cas_has_one_acceptance_and_one_refusal() {
         let store = control.0.clone();
         handles.push(thread::spawn(move || {
             barrier.wait();
-            apply_request(&store, IDENTITY, &request).unwrap()
+            authorized_apply(&store, &request).unwrap()
         }));
     }
     barrier.wait();
@@ -291,16 +365,14 @@ fn stale_crash_temp_is_cleaned_and_unsafe_state_fails_closed() {
         &policy,
         &pin,
     );
-    apply_request(&control.0, IDENTITY, &bootstrap).unwrap();
+    authorized_apply(&control.0, &bootstrap).unwrap();
     let stale = control
         .0
         .join(".state.json.tmp-0123456789abcdef0123456789abcdef");
     fs::write(&stale, b"interrupted-write").unwrap();
     fs::set_permissions(&stale, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
-        apply_request(&control.0, IDENTITY, &bootstrap)
-            .unwrap()
-            .decision(),
+        authorized_apply(&control.0, &bootstrap).unwrap().decision(),
         &RemoteCursorCasDecision::Accepted
     );
     assert!(!stale.exists());
@@ -334,7 +406,7 @@ fn live_writer_lock_is_bounded_and_fails_closed() {
         .unwrap();
     assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
     assert!(matches!(
-        apply_request(&control.0, IDENTITY, &bootstrap),
+        authorized_apply(&control.0, &bootstrap),
         Err(ControlPlaneError::StoreBusy)
     ));
     assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
@@ -411,5 +483,89 @@ fn policy() -> (RemoteCursorPolicy, String) {
 }
 
 fn provision(path: &std::path::Path, policy: &RemoteCursorPolicy, pin: &str) {
-    provision_control_plane_store(path, IDENTITY, pin, &policy.signature_domain).unwrap();
+    provision_control_plane_store(
+        path,
+        IDENTITY,
+        pin,
+        &policy.signature_domain,
+        &caller_pin(pin),
+    )
+    .unwrap();
+}
+
+fn caller_material(remote_pin: &str) -> (CallerAuthorizationPolicy, Vec<SigningKey>, String) {
+    let keys = vec![
+        SigningKey::from_bytes(&[91; 32]),
+        SigningKey::from_bytes(&[92; 32]),
+    ];
+    let policy = CallerAuthorizationPolicy {
+        schema: CALLER_AUTH_POLICY_SCHEMA.into(),
+        policy_id: "control-plane-callers".into(),
+        signature_domain: "bloch-control-plane-caller-auth".into(),
+        state_identity: IDENTITY.into(),
+        remote_cursor_policy_sha256: remote_pin.into(),
+        threshold: 2,
+        effective_at_unix_seconds: 100,
+        expires_at_unix_seconds: 1_000,
+        max_authorization_age_seconds: 100,
+        max_authorization_lifetime_seconds: 100,
+        authorities: keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| CallerAuthority {
+                authority_id: format!("caller-{}", index + 1),
+                ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().as_bytes())),
+            })
+            .collect(),
+    };
+    let pin = caller_authorization_policy_sha256(&policy).unwrap();
+    (policy, keys, pin)
+}
+
+fn caller_pin(remote_pin: &str) -> String {
+    caller_material(remote_pin).2
+}
+
+fn authorized_apply(
+    store: &std::path::Path,
+    request: &ValidatedRemoteCursorCasRequest,
+) -> Result<bloch_local_state_remote_cursor_control_plane::ControlPlaneDecision, ControlPlaneError>
+{
+    let authorization = caller_authorization(request);
+    apply_request(store, IDENTITY, request, &authorization)
+}
+
+fn caller_authorization(
+    request: &ValidatedRemoteCursorCasRequest,
+) -> VerifiedRemoteCursorCasCallerAuthorization {
+    caller_authorization_at(request, 225)
+}
+
+fn caller_authorization_at(
+    request: &ValidatedRemoteCursorCasRequest,
+    evaluated_at_unix_seconds: u64,
+) -> VerifiedRemoteCursorCasCallerAuthorization {
+    const NONCE: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let (policy, keys, pin) = caller_material(request.remote_cursor_policy_sha256());
+    let message =
+        caller_authorization_signature_message(request, &policy, &pin, NONCE, 200, 250).unwrap();
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| CallerSignature {
+            authority_id: format!("caller-{}", index + 1),
+            signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+        })
+        .collect::<Vec<_>>();
+    let bytes =
+        create_caller_authorization(request, &policy, &pin, NONCE, 200, 250, &signatures).unwrap();
+    verify_caller_authorization(
+        &bytes,
+        request,
+        &policy,
+        &pin,
+        NONCE,
+        evaluated_at_unix_seconds,
+    )
+    .unwrap()
 }

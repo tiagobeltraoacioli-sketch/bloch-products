@@ -18,6 +18,17 @@ pin and reject capabilities issued for another state identity or remote-cursor
 policy. `start_data` and `start_pay` remain compatibility-only, non-qualified
 paths because their fetch session uses the host wall clock.
 
+`start_data_with_fresh_trusted_time` and
+`start_pay_with_fresh_trusted_time` additionally generate a fresh in-memory
+time challenge, acquire the bounded token, verify it against the retained
+rollback floor, durably advance that floor, and only then fetch the remote
+cursor and admit local state. The complete sequence holds the product's local
+coordination lock. Every cooperating updater for that boundary store must use
+the same coordination domain. The conservative floor is the token's signed
+exclusive terminal instant, closing a crash window at the cost of requiring a
+later token to reach that instant. The reference filesystem store still cannot
+detect host, mount, volume or VM snapshot rollback.
+
 The opaque verified remote cursor never leaves this composition. The crate has
 no CLI, filesystem input loader, network client, cache, nonce persistence or
 private-key API. The caller-provided transport must enforce the monotonic

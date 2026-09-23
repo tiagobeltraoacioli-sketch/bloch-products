@@ -11,7 +11,11 @@ operator-supplied wall-clock value or a time proof issued for another state.
 The capability can produce a canonical rollback boundary. Production callers
 must durably store that boundary in storage that an attacker cannot roll back,
 and supply it when verifying the next token. A missing or rollbackable boundary
-cannot provide cross-restart rollback protection.
+cannot provide cross-restart rollback protection. The boundary uses the
+token's signed exclusive `validUntil`, rather than its current instant, so a
+crash cannot reopen time consumed later by the capability. A subsequent token
+must therefore attest at or after that terminal floor; shorter token lifetimes
+reduce the corresponding availability delay.
 
 This crate deliberately does not fetch tokens, persist boundaries, manage
 keys, synchronize authority clocks, or establish that authorities are

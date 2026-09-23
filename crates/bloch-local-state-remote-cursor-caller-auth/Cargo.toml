@@ -1,0 +1,18 @@
+[package]
+name = "bloch-local-state-remote-cursor-caller-auth"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }
+ed25519-dalek.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }

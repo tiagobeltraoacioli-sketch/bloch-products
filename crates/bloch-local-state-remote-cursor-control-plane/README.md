@@ -8,8 +8,10 @@ State and request-ID decisions are persisted together using owner-only files,
 directory `fsync` and readback.
 
 Provisioning is an explicit, one-time operation through
-`provision_control_plane_store` and binds the state identity, remote policy pin
-and signature domain to that store. Normal `apply_request` and read paths never
+`provision_control_plane_store` and binds the state identity, remote policy
+pin, signature domain and caller-authorization policy pin to that store. Every
+mutation requires a fresh opaque threshold authorization for the exact request.
+Normal `apply_request` and read paths never
 create a directory, lock, or state file. A typo or deletion during ordinary
 operation thus fails closed and cannot silently become a new empty epoch
 eligible for another bootstrap. Retrying provisioning over any existing path
@@ -25,7 +27,7 @@ The request history is deliberately bounded. Once full, new IDs fail rather
 than evicting old idempotency records. Operators must provision a new qualified
 epoch/store rather than silently losing replay protection.
 
-This crate performs no networking, workload authentication, signing, private
+This crate performs no networking, caller-challenge issuance, signing, private
 key handling, replication, quorum consensus or high availability. Its returned
 decision is unsigned material for independent authorities; it never fabricates
 a signed receipt and does not prove authority independence. The single-host

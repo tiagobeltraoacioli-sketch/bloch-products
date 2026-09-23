@@ -89,7 +89,7 @@ fn verifies_threshold_token_and_produces_canonical_boundary() {
         .canonical_bytes()
         .unwrap();
     let parsed = parse_trusted_time_boundary(&bytes, &fixture.pin).unwrap();
-    assert_eq!(parsed.not_before_unix_seconds(), 2_000);
+    assert_eq!(parsed.not_before_unix_seconds(), 2_030);
 }
 
 #[test]

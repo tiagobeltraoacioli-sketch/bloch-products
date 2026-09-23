@@ -123,13 +123,23 @@ identity, prove finality, activate a network, or authorize asset movement.
   cursor policy, returned as an opaque monotonic capability. Fetching,
   rollback-resistant boundary storage and host suspend qualification remain
   external gates.
+- `bloch-trusted-time-session`: one-shot CSPRNG challenge and bounded,
+  deadline-aware token acquisition returning only an authenticated time
+  capability; authenticated network delivery remains external.
+- `bloch-trusted-time-boundary-store`: explicitly provisioned Unix reference
+  store for durable monotonic time floors, bound to one exact audience. It
+  does not detect filesystem, mount, VM or host snapshot rollback.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   the one-shot remote session to coordinated checkpoint, cursor, store and
   semantic admission without materializing a raw cursor or nonce file.
 - `bloch-local-state-remote-cursor-control-plane`: Unix reference core for
   explicitly provisioned, durable, idempotent and serialized cursor CAS. It
-  returns unsigned decision material and is not a replicated production
-  service or signing authority.
+  requires an exact threshold caller-authorization capability, returns
+  unsigned decision material and is not a replicated production service or
+  signing authority.
+- `bloch-local-state-remote-cursor-caller-auth`: canonical pinned threshold
+  authorization for the exact bytes of one CAS request, including identity,
+  remote policy, nonce and validity interval.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.

@@ -156,7 +156,11 @@ impl VerifiedTrustedTime {
         Ok(TrustedTimeBoundary(BoundaryDocument {
             schema: TRUSTED_TIME_BOUNDARY_SCHEMA.into(),
             trusted_time_policy_sha256: self.policy_sha256.clone(),
-            not_before_unix_seconds: self.unix_seconds()?,
+            // Persist the terminal signed instant, not the capability's
+            // current instant. This conservatively closes the crash window
+            // between persisting the floor and later consumers evaluating
+            // time as the monotonic capability advances.
+            not_before_unix_seconds: self.valid_until_unix_seconds,
         }))
     }
 

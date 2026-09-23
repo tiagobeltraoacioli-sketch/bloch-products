@@ -31,9 +31,13 @@ use bloch_local_state_store::write_state;
 use bloch_pay_adjustments::{ADJUSTMENT_STATE_SCHEMA, AdjustmentStatus};
 use bloch_trusted_time::{
     TRUSTED_TIME_POLICY_SCHEMA, TrustedTimeAuthority, TrustedTimePolicy, TrustedTimeSignature,
-    VerifiedTrustedTime, create_trusted_time_token, trusted_time_policy_sha256,
-    trusted_time_signature_message, verify_trusted_time_token,
+    VerifiedTrustedTime, create_trusted_time_token, trusted_time_policy_bytes,
+    trusted_time_policy_sha256, trusted_time_signature_message, verify_trusted_time_token,
 };
+use bloch_trusted_time_boundary_store::{
+    TrustedTimeBoundaryAudience, load_trusted_time_boundary, provision_trusted_time_boundary_store,
+};
+use bloch_trusted_time_session::MonotonicDeadlineRead;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -45,6 +49,27 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct Temp(PathBuf);
+
+struct TokenReader {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl MonotonicDeadlineRead for TokenReader {
+    type Error = std::io::Error;
+
+    fn read_with_deadline(
+        &mut self,
+        buffer: &mut [u8],
+        _deadline: Instant,
+    ) -> Result<usize, Self::Error> {
+        let available = self.bytes.len().saturating_sub(self.offset);
+        let read = available.min(buffer.len());
+        buffer[..read].copy_from_slice(&self.bytes[self.offset..self.offset + read]);
+        self.offset += read;
+        Ok(read)
+    }
+}
 
 impl Temp {
     fn new(label: &str) -> Self {
@@ -438,6 +463,67 @@ fn trusted_time_paths_admit_data_and_pay_without_operator_time() {
 }
 
 #[test]
+fn fresh_time_acquisition_advances_boundary_before_pay_admission() {
+    let fixture = pay_fixture();
+    let boundary_store = Temp::new("trusted-time-boundary");
+    let (policy, pin, keys) = trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+    let initial_nonce = "runtime_initial_time_nonce_0123456789abcdef0123456789abcdef";
+    let initial_at = now() - 31;
+    let initial_token = trusted_time_token(&policy, &pin, &keys, initial_nonce, initial_at);
+    let initial_time =
+        verify_trusted_time_token(&initial_token, &policy, &pin, initial_nonce, None).unwrap();
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: &pin,
+        state_identity: &fixture.identity,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+    };
+    provision_trusted_time_boundary_store(
+        &boundary_store.0,
+        audience,
+        &initial_time.rollback_boundary().unwrap(),
+    )
+    .unwrap();
+    let policy_bytes = trusted_time_policy_bytes(&policy).unwrap();
+    let issued_at = now();
+
+    let admitted = start_pay_with_fresh_trusted_time(
+        PayStartupMaterials {
+            remote: fixture.remote(Duration::from_secs(1)),
+            local: fixture.local(),
+        },
+        TrustedTimeStartupMaterials {
+            policy_bytes: &policy_bytes,
+            expected_policy_sha256: &pin,
+            boundary_store: &boundary_store.0,
+            timeout: Duration::from_secs(1),
+        },
+        |request| {
+            Ok::<_, std::io::Error>(TokenReader {
+                bytes: trusted_time_token(&policy, &pin, &keys, request.request_nonce(), issued_at),
+                offset: 0,
+            })
+        },
+        |request| {
+            assert_eq!(
+                load_trusted_time_boundary(&boundary_store.0, audience)
+                    .unwrap()
+                    .not_before_unix_seconds(),
+                issued_at + 30
+            );
+            Ok::<_, std::io::Error>(fixture.response_at(request.request_nonce(), issued_at))
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.state().adjustment_id(), "adjustment-1");
+    assert_eq!(
+        load_trusted_time_boundary(&boundary_store.0, audience)
+            .unwrap()
+            .not_before_unix_seconds(),
+        issued_at + 30
+    );
+}
+
+#[test]
 fn timeout_replay_and_cross_identity_fail_closed() {
     let fixture = pay_fixture();
     let timeout = start_pay(
@@ -591,12 +677,11 @@ fn digest(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn trusted_time(
+fn trusted_time_policy(
     state_identity: &str,
     remote_cursor_policy_sha256: &str,
-) -> (VerifiedTrustedTime, String) {
-    let now = now();
-    let nonce = "runtime_trusted_time_nonce_0123456789abcdef0123456789abcdef";
+) -> (TrustedTimePolicy, String, [SigningKey; 2]) {
+    let current = now();
     let keys = [
         SigningKey::from_bytes(&[111; 32]),
         SigningKey::from_bytes(&[112; 32]),
@@ -608,8 +693,8 @@ fn trusted_time(
         state_identity: state_identity.into(),
         remote_cursor_policy_sha256: remote_cursor_policy_sha256.into(),
         threshold: 2,
-        effective_at_unix_seconds: now - 60,
-        expires_at_unix_seconds: now + 60,
+        effective_at_unix_seconds: current - 60,
+        expires_at_unix_seconds: current + 60,
         max_token_lifetime_seconds: 30,
         authorities: keys
             .iter()
@@ -621,7 +706,17 @@ fn trusted_time(
             .collect(),
     };
     let pin = trusted_time_policy_sha256(&policy).unwrap();
-    let message = trusted_time_signature_message(&policy, &pin, nonce, now, now + 30).unwrap();
+    (policy, pin, keys)
+}
+
+fn trusted_time_token(
+    policy: &TrustedTimePolicy,
+    pin: &str,
+    keys: &[SigningKey; 2],
+    nonce: &str,
+    at: u64,
+) -> Vec<u8> {
+    let message = trusted_time_signature_message(policy, pin, nonce, at, at + 30).unwrap();
     let signatures = keys
         .iter()
         .enumerate()
@@ -630,8 +725,17 @@ fn trusted_time(
             signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
         })
         .collect::<Vec<_>>();
-    let token =
-        create_trusted_time_token(&policy, &pin, nonce, now, now + 30, &signatures).unwrap();
+    create_trusted_time_token(policy, pin, nonce, at, at + 30, &signatures).unwrap()
+}
+
+fn trusted_time(
+    state_identity: &str,
+    remote_cursor_policy_sha256: &str,
+) -> (VerifiedTrustedTime, String) {
+    let now = now();
+    let nonce = "runtime_trusted_time_nonce_0123456789abcdef0123456789abcdef";
+    let (policy, pin, keys) = trusted_time_policy(state_identity, remote_cursor_policy_sha256);
+    let token = trusted_time_token(&policy, &pin, &keys, nonce, now);
     (
         verify_trusted_time_token(&token, &policy, &pin, nonce, None).unwrap(),
         pin,

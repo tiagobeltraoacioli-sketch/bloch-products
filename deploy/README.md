@@ -38,6 +38,8 @@ Files:
 - `verify-unit-separation.sh`: static negative check that the synthetic unit is
   not legacy-named, installable, aliased or referenced by another bundled
   systemd unit.
+- `test-unit-separation.sh`: adversarial fixtures for dangling legacy names,
+  whitespace-obscured install directives, target dependencies and aliases.
 
 This synthetic-pilot bundle does not yet authenticate the staged root through
 `bloch-local-state-checkpoint` or a remote monotonic cursor. It provides no

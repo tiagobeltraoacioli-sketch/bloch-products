@@ -6,8 +6,9 @@ This is a production-gate specification, not deployment evidence. The remote
 cursor protocol, memory-only fetch session, local coordination, semantic
 admission, transition/recovery composition, single-host CAS reference core and
 re-bootstrap tools exist as building blocks. Audience-bound threshold trusted
-time and bounded incremental ingress also exist. A qualified network transport,
-rollback-resistant time-boundary store, replicated remote service, authority
+time, fresh bounded acquisition, a single-host monotonic-boundary reference
+store and bounded cursor ingress also exist. A qualified network transport,
+independent rollback-resistant time root, replicated remote service, authority
 signing boundary and production systemd composition are not deployed or
 qualified.
 
@@ -29,9 +30,11 @@ record. Accounts must be locked, have no login shell and run no unrelated code.
 | Data state | `bloch-data` | `/var/lib/bloch-products/data/state` | `bloch-data:bloch-data`, `0700` |
 | Data cursor | `bloch-data` | `/var/lib/bloch-products/data/cursor` | `bloch-data:bloch-data`, `0700` |
 | Data coordination | `bloch-data` | `/run/bloch-products/data/coord` | `bloch-data:bloch-data`, `0700` |
+| Data trusted-time boundary | `bloch-data` | `/var/lib/bloch-products/data/trusted-time-boundary` | explicitly provisioned store, `0700` |
 | Pay state | `bloch-pay` | `/var/lib/bloch-products/pay/state` | `bloch-pay:bloch-pay`, `0700` |
 | Pay cursor | `bloch-pay` | `/var/lib/bloch-products/pay/cursor` | `bloch-pay:bloch-pay`, `0700` |
 | Pay coordination | `bloch-pay` | `/run/bloch-products/pay/coord` | `bloch-pay:bloch-pay`, `0700` |
+| Pay trusted-time boundary | `bloch-pay` | `/var/lib/bloch-products/pay/trusted-time-boundary` | explicitly provisioned store, `0700` |
 | Fetch staging | `bloch-data-fetch` / `bloch-pay-fetch` | `/run/bloch-products-fetch/INSTANCE` | matching fetch UID, `0700`, ephemeral |
 | Pinned trust material | root | `/etc/bloch-products/trust/INSTANCE` | `root:root`, directory `0500`, files `0400` |
 
@@ -42,10 +45,10 @@ be pre-created; a missing or different path is an error, never permission to
 create an alternative lock domain.
 
 Every cooperating local admission and writer must acquire the same coordination
-lock before cursor or state locks, always in this order:
+lock before time-boundary, cursor or state locks, always in this order:
 
 ```text
-coordination -> cursor -> state
+coordination -> trusted-time boundary -> cursor -> state
 ```
 
 Advisory locks do not constrain code running as the same UID that ignores the
@@ -60,6 +63,13 @@ itself satisfy the separate fetch/product UID and network-isolation model
 below. Production qualification must select and test one complete composition
 without reducing nonce, trusted-time or policy provenance to an unauthenticated
 raw cursor.
+
+The runtime's fresh-time entry points load the explicitly provisioned boundary,
+acquire and verify a nonce-bound token, durably advance the boundary, and only
+then authenticate the remote cursor and local state. Creating an empty boundary
+directory through tmpfiles is forbidden because it could blur deletion from
+first provisioning. Every cooperating boundary updater must use the same local
+coordination domain.
 
 ### 1. Networked fetch unit
 
@@ -217,10 +227,10 @@ require a separate authority-approved recovery or re-genesis ceremony.
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
 | P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition and negative tests exist; qualified transport/systemd integration evidence remains |
-| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Audience-bound threshold capability exists; fresh acquisition, rollback-resistant boundary storage, suspend/resume qualification and host tests remain |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core and concurrency tests exist; replicated service, external signing and operational qualification remain |
+| P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition and a single-host monotonic store exist; independent anti-rollback root, suspend/resume qualification and host tests remain |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host reference core, exact threshold caller authorization and concurrency tests exist; replicated service, fresh challenge service, external decision signing and operational qualification remain |
 | P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
-| P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed and has no install relationship; target-level negative test remains |
+| P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed, has no install relationship and CI rejects production-target dependencies/aliases; target-host composition evidence remains |
 | P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations exist; host manifest, unit verification and ownership checks remain |
 | P1 | Exact credential names and provenance | **Partial** | Fixed CLI credential names exist; systemd integration tests and arbitrary-name rejection remain |
 | P1 | Fresh fetch lifecycle with no stale runtime fallback | **Partial** | Memory-only session and bounded-ingress tests exist; qualified adapter, repeated-start, reboot and transport-failure evidence remain |

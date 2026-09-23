@@ -66,9 +66,11 @@ evidence proves the remote CAS did not accept the candidate.
 
 The repository now defines authenticated cursor observation, canonical signed
 CAS requests and receipts, and an explicitly provisioned durable single-host
-reference CAS core. The reference core returns unsigned decision material; it
-is not a network service, signing authority, replicated linearizable service or
-caller-authorization boundary. Therefore this sequence remains an
+reference CAS core. The core now requires an exact threshold caller
+authorization capability before mutation, but fresh authorization challenges
+and replay tracking remain external. It returns unsigned decision material and
+is not a network service, signing authority or replicated linearizable service.
+Therefore this sequence remains an
 implementation contract, not deployment evidence, and production activation
 is blocked. Even a valid signed acceptance receipt must be followed by a fresh
 authenticated cursor observation matching the exact successor.
