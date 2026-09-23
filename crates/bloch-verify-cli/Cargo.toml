@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 bloch-verify-core = { path = "../bloch-verify-core" }
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

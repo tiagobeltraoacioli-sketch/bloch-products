@@ -4,7 +4,9 @@ This is a lightweight engineering index. Detailed product and API documentation
 will follow working implementations and retained evidence.
 
 1. Bloch Verify comparison core and offline CLI — implemented.
-2. Signed observation envelopes and independently pinned operator trust policy — implemented; external organizational verification remains open.
+2. Signed observation envelopes, detached signing requests and independently
+   pinned operator trust policy — implemented; external organizational
+   verification remains open.
 3. Node adapters, ancestry proofs and checkpoint collection without implicit trust in RPC.
 4. Indexer, versioned read API, idempotent webhooks and SDK.
 5. Non-custodial treasury policy evaluation and payment reconciliation.

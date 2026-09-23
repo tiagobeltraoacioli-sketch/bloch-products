@@ -10,6 +10,8 @@ const SCHEMA: &str = "bloch.verify.checkpoint-bundle.v1";
 const SIGNED_SCHEMA: &str = "bloch.verify.signed-checkpoint-bundle.v1";
 const TRUST_POLICY_SCHEMA: &str = "bloch.verify.operator-trust-policy.v1";
 const OBSERVATION_SIGNATURE_DOMAIN: &str = "bloch.verify.node-observation.v1";
+const SIGNING_REQUEST_SCHEMA: &str = "bloch.verify.observation-signing-request.v1";
+const SIGNED_RESPONSE_SCHEMA: &str = "bloch.verify.signed-observation-response.v1";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VerifyError {
@@ -116,6 +118,29 @@ pub struct SignedNodeObservation {
     pub signature: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ObservationSigningRequest {
+    pub schema: String,
+    pub domain: String,
+    pub trust_policy_sha256: String,
+    pub observer_id: String,
+    pub organization_id: String,
+    pub ed25519_public_key: String,
+    pub observation_sha256: String,
+    pub message_sha256: String,
+    pub observation: NodeObservation,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SignedObservationResponse {
+    pub schema: String,
+    pub request_sha256: String,
+    pub request: ObservationSigningRequest,
+    pub signature: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssessmentReport {
@@ -178,6 +203,30 @@ pub fn parse_trust_policy(bytes: &[u8]) -> Result<OperatorTrustPolicy, VerifyErr
     Ok(policy)
 }
 
+pub fn parse_observation(bytes: &[u8]) -> Result<NodeObservation, VerifyError> {
+    safe_size(bytes)?;
+    let observation: NodeObservation = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_observation(&observation)?;
+    Ok(observation)
+}
+
+pub fn parse_signing_request(bytes: &[u8]) -> Result<ObservationSigningRequest, VerifyError> {
+    safe_size(bytes)?;
+    let request: ObservationSigningRequest = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_signing_request(&request)?;
+    Ok(request)
+}
+
+pub fn parse_signed_response(bytes: &[u8]) -> Result<SignedObservationResponse, VerifyError> {
+    safe_size(bytes)?;
+    let response: SignedObservationResponse = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_signed_response(&response)?;
+    Ok(response)
+}
+
 pub fn trust_policy_sha256(policy: &OperatorTrustPolicy) -> Result<String, VerifyError> {
     validate_trust_policy(policy)?;
     let mut canonical = policy.clone();
@@ -206,6 +255,156 @@ pub fn signed_observation_message(
         observation,
     })
     .map_err(|error| VerifyError::InvalidJson(error.to_string()))
+}
+
+pub fn prepare_signing_request(
+    policy: &OperatorTrustPolicy,
+    expected_trust_policy_sha256: &str,
+    observation: &NodeObservation,
+) -> Result<(ObservationSigningRequest, Vec<u8>), VerifyError> {
+    validate_trust_policy(policy)?;
+    validate_observation(observation)?;
+    let digest = trust_policy_sha256(policy)?;
+    if digest != expected_trust_policy_sha256 {
+        return Err(VerifyError::TrustPolicyDigestMismatch);
+    }
+    let operator = policy
+        .operators
+        .iter()
+        .find(|operator| operator.observer_id == observation.observer_id)
+        .ok_or_else(|| VerifyError::UntrustedObserver(observation.observer_id.clone()))?;
+    if operator.organization_id != observation.organization_id {
+        return Err(VerifyError::UntrustedObserver(
+            observation.observer_id.clone(),
+        ));
+    }
+    let message = signed_observation_message(&digest, observation)?;
+    let request = ObservationSigningRequest {
+        schema: SIGNING_REQUEST_SCHEMA.into(),
+        domain: OBSERVATION_SIGNATURE_DOMAIN.into(),
+        trust_policy_sha256: digest,
+        observer_id: observation.observer_id.clone(),
+        organization_id: observation.organization_id.clone(),
+        ed25519_public_key: operator.ed25519_public_key.clone(),
+        observation_sha256: canonical_digest(observation)?,
+        message_sha256: sha256(&message),
+        observation: observation.clone(),
+    };
+    validate_signing_request(&request)?;
+    Ok((request, message))
+}
+
+pub fn import_observation_signature(
+    request: &ObservationSigningRequest,
+    signature_bytes: &[u8],
+) -> Result<SignedObservationResponse, VerifyError> {
+    validate_signing_request(request)?;
+    let signature_array: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| VerifyError::InvalidField("signature"))?;
+    let signature = Signature::from_bytes(&signature_array);
+    let key_bytes = decode_hex_array::<32>(
+        &request.ed25519_public_key,
+        "signingRequest.ed25519PublicKey",
+    )?;
+    let key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| VerifyError::InvalidField("signingRequest.ed25519PublicKey"))?;
+    let message = signed_observation_message(&request.trust_policy_sha256, &request.observation)?;
+    key.verify(&message, &signature)
+        .map_err(|_| VerifyError::InvalidSignature(request.observer_id.clone()))?;
+    let response = SignedObservationResponse {
+        schema: SIGNED_RESPONSE_SCHEMA.into(),
+        request_sha256: canonical_digest(request)?,
+        request: request.clone(),
+        signature: format!("0x{}", hex::encode(signature_array)),
+    };
+    validate_signed_response(&response)?;
+    Ok(response)
+}
+
+pub fn assemble_signed_bundle(
+    policy: &OperatorTrustPolicy,
+    expected_trust_policy_sha256: &str,
+    responses: &[SignedObservationResponse],
+) -> Result<SignedEvidenceBundle, VerifyError> {
+    validate_trust_policy(policy)?;
+    let policy_sha256 = trust_policy_sha256(policy)?;
+    if policy_sha256 != expected_trust_policy_sha256 {
+        return Err(VerifyError::TrustPolicyDigestMismatch);
+    }
+    if responses.is_empty() || responses.len() > MAX_OBSERVATIONS {
+        return Err(VerifyError::InvalidField("responses"));
+    }
+    let mut signed_observations = Vec::with_capacity(responses.len());
+    let mut observer_ids = BTreeSet::new();
+    let mut expected_checkpoint: Option<&NodeObservation> = None;
+    for response in responses {
+        validate_signed_response(response)?;
+        if response.request.trust_policy_sha256 != policy_sha256 {
+            return Err(VerifyError::TrustPolicyDigestMismatch);
+        }
+        let operator = policy
+            .operators
+            .iter()
+            .find(|operator| operator.observer_id == response.request.observer_id)
+            .ok_or_else(|| VerifyError::UntrustedObserver(response.request.observer_id.clone()))?;
+        if operator.organization_id != response.request.organization_id
+            || operator.ed25519_public_key != response.request.ed25519_public_key
+        {
+            return Err(VerifyError::UntrustedObserver(
+                response.request.observer_id.clone(),
+            ));
+        }
+        if !observer_ids.insert(response.request.observer_id.as_str()) {
+            return Err(VerifyError::UntrustedObserver(
+                response.request.observer_id.clone(),
+            ));
+        }
+        let observation = &response.request.observation;
+        if let Some(expected) = expected_checkpoint {
+            if observation.network != expected.network
+                || observation.chain_id != expected.chain_id
+                || observation.genesis_hash != expected.genesis_hash
+                || observation.checkpoint_height != expected.checkpoint_height
+                || observation.checkpoint_block_hash != expected.checkpoint_block_hash
+                || observation.checkpoint_state_root != expected.checkpoint_state_root
+            {
+                return Err(VerifyError::InvalidField("responses.checkpoint"));
+            }
+        } else {
+            expected_checkpoint = Some(observation);
+        }
+        let signature =
+            decode_hex_array::<64>(&response.signature, "signedObservationResponse.signature")?;
+        import_observation_signature(&response.request, &signature)?;
+        signed_observations.push(SignedNodeObservation {
+            observation: response.request.observation.clone(),
+            signature: response.signature.clone(),
+        });
+    }
+    signed_observations.sort_by(|left, right| {
+        left.observation
+            .observer_id
+            .cmp(&right.observation.observer_id)
+    });
+    let first = &signed_observations[0].observation;
+    let bundle = SignedEvidenceBundle {
+        schema: SIGNED_SCHEMA.into(),
+        network: NetworkIdentity {
+            network: first.network.clone(),
+            chain_id: first.chain_id,
+            genesis_hash: first.genesis_hash.clone(),
+        },
+        checkpoint: Checkpoint {
+            height: first.checkpoint_height,
+            block_hash: first.checkpoint_block_hash.clone(),
+            state_root: first.checkpoint_state_root.clone(),
+        },
+        trust_policy_sha256: policy_sha256,
+        signed_observations,
+    };
+    validate_signed_shape(&bundle)?;
+    Ok(bundle)
 }
 
 pub fn assess(
@@ -420,6 +619,68 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String, VerifyError> {
     let bytes =
         serde_json::to_vec(value).map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn validate_signing_request(request: &ObservationSigningRequest) -> Result<(), VerifyError> {
+    if request.schema != SIGNING_REQUEST_SCHEMA
+        || request.domain != OBSERVATION_SIGNATURE_DOMAIN
+        || request.observer_id != request.observation.observer_id
+        || request.organization_id != request.observation.organization_id
+    {
+        return Err(VerifyError::InvalidField("signingRequest"));
+    }
+    hash32(
+        &request.trust_policy_sha256,
+        "signingRequest.trustPolicySha256",
+    )?;
+    decode_hex_array::<32>(
+        &request.ed25519_public_key,
+        "signingRequest.ed25519PublicKey",
+    )?;
+    validate_observation(&request.observation)?;
+    if request.observation_sha256 != canonical_digest(&request.observation)? {
+        return Err(VerifyError::InvalidField(
+            "signingRequest.observationSha256",
+        ));
+    }
+    let message = signed_observation_message(&request.trust_policy_sha256, &request.observation)?;
+    if request.message_sha256 != sha256(&message) {
+        return Err(VerifyError::InvalidField("signingRequest.messageSha256"));
+    }
+    Ok(())
+}
+
+fn validate_signed_response(response: &SignedObservationResponse) -> Result<(), VerifyError> {
+    if response.schema != SIGNED_RESPONSE_SCHEMA {
+        return Err(VerifyError::InvalidField(
+            "signedObservationResponse.schema",
+        ));
+    }
+    validate_signing_request(&response.request)?;
+    if response.request_sha256 != canonical_digest(&response.request)? {
+        return Err(VerifyError::InvalidField(
+            "signedObservationResponse.requestSha256",
+        ));
+    }
+    let signature_bytes =
+        decode_hex_array::<64>(&response.signature, "signedObservationResponse.signature")?;
+    let key_bytes = decode_hex_array::<32>(
+        &response.request.ed25519_public_key,
+        "signingRequest.ed25519PublicKey",
+    )?;
+    let key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| VerifyError::InvalidField("signingRequest.ed25519PublicKey"))?;
+    let message = signed_observation_message(
+        &response.request.trust_policy_sha256,
+        &response.request.observation,
+    )?;
+    key.verify(&message, &Signature::from_bytes(&signature_bytes))
+        .map_err(|_| VerifyError::InvalidSignature(response.request.observer_id.clone()))?;
+    Ok(())
 }
 
 fn validate_shape(bundle: &EvidenceBundle) -> Result<(), VerifyError> {
@@ -745,5 +1006,90 @@ mod tests {
         let (mut policy, _, digest) = signed_fixture();
         policy.operators.reverse();
         assert_eq!(trust_policy_sha256(&policy).unwrap(), digest);
+    }
+
+    #[test]
+    fn detached_signature_workflow_builds_the_same_authenticated_bundle() {
+        let unsigned = parse_bundle(FIXTURE).unwrap();
+        let (policy, _, digest) = signed_fixture();
+        let keys = [
+            SigningKey::from_bytes(&[7; 32]),
+            SigningKey::from_bytes(&[9; 32]),
+        ];
+        let responses: Vec<_> = unsigned
+            .observations
+            .iter()
+            .zip(&keys)
+            .map(|(observation, key)| {
+                let (request, message) =
+                    prepare_signing_request(&policy, &digest, observation).unwrap();
+                assert_eq!(request.message_sha256, sha256(&message));
+                import_observation_signature(&request, &key.sign(&message).to_bytes()).unwrap()
+            })
+            .collect();
+        let bundle = assemble_signed_bundle(&policy, &digest, &responses).unwrap();
+        let report = assess_signed(&bundle, &policy, &digest, 1_790_121_600).unwrap();
+        assert!(report.authenticated_comparison_passed);
+        assert!(!report.production_qualified);
+    }
+
+    #[test]
+    fn request_and_response_bind_every_observation_byte() {
+        let unsigned = parse_bundle(FIXTURE).unwrap();
+        let (policy, _, digest) = signed_fixture();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let (request, message) =
+            prepare_signing_request(&policy, &digest, &unsigned.observations[0]).unwrap();
+        let mut response =
+            import_observation_signature(&request, &key.sign(&message).to_bytes()).unwrap();
+        response.request.observation.claimed_finalized_height += 1;
+        assert!(parse_signed_response(&serde_json::to_vec(&response).unwrap()).is_err());
+        assert!(matches!(
+            import_observation_signature(&request, &[0; 63]),
+            Err(VerifyError::InvalidField("signature"))
+        ));
+    }
+
+    #[test]
+    fn assembly_refuses_duplicate_observers_and_divergent_checkpoints() {
+        let unsigned = parse_bundle(FIXTURE).unwrap();
+        let (policy, _, digest) = signed_fixture();
+        let keys = [
+            SigningKey::from_bytes(&[7; 32]),
+            SigningKey::from_bytes(&[9; 32]),
+        ];
+        let responses: Vec<_> = unsigned
+            .observations
+            .iter()
+            .zip(&keys)
+            .map(|(observation, key)| {
+                let (request, message) =
+                    prepare_signing_request(&policy, &digest, observation).unwrap();
+                import_observation_signature(&request, &key.sign(&message).to_bytes()).unwrap()
+            })
+            .collect();
+        assert!(matches!(
+            assemble_signed_bundle(
+                &policy,
+                &digest,
+                &[responses[0].clone(), responses[0].clone()]
+            ),
+            Err(VerifyError::UntrustedObserver(_))
+        ));
+
+        let mut divergent = unsigned.observations[1].clone();
+        divergent.checkpoint_block_hash = format!("0x{}", "9".repeat(64));
+        let (request, message) = prepare_signing_request(&policy, &digest, &divergent).unwrap();
+        let divergent_response =
+            import_observation_signature(&request, &keys[1].sign(&message).to_bytes()).unwrap();
+        assert_eq!(
+            assemble_signed_bundle(
+                &policy,
+                &digest,
+                &[responses[0].clone(), divergent_response]
+            )
+            .unwrap_err(),
+            VerifyError::InvalidField("responses.checkpoint")
+        );
     }
 }

@@ -15,6 +15,7 @@ dependencies = [
  "bloch-verify-core",
  "ed25519-dalek",
  "hex",
+ "serde",
  "serde_json",
 ]
 
