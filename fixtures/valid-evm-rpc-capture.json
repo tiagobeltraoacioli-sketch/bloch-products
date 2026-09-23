@@ -1,0 +1,43 @@
+{
+  "schema": "bloch.verify.evm-rpc-capture.v1",
+  "observerId": "observer-a",
+  "organizationId": "organization-a",
+  "endpointSha256": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "observedAtUnixSeconds": 1790121600,
+  "network": "bloch-l2",
+  "releaseRevision": "0x2222222222222222222222222222222222222222",
+  "clientVersion": {
+    "request": {"jsonrpc": "2.0", "id": 1, "method": "web3_clientVersion", "params": []},
+    "response": {"jsonrpc": "2.0", "id": 1, "result": "bloch-l2/v0.1.0"}
+  },
+  "chainId": {
+    "request": {"jsonrpc": "2.0", "id": 2, "method": "eth_chainId", "params": []},
+    "response": {"jsonrpc": "2.0", "id": 2, "result": "0xab163"}
+  },
+  "genesisBlock": {
+    "request": {"jsonrpc": "2.0", "id": 3, "method": "eth_getBlockByNumber", "params": ["0x0", false]},
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "number": "0x0",
+        "hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "stateRoot": "0x4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    }
+  },
+  "finalizedBlock": {
+    "request": {"jsonrpc": "2.0", "id": 4, "method": "eth_getBlockByNumber", "params": ["finalized", false]},
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "number": "0x2a",
+        "hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+        "parentHash": "0x6666666666666666666666666666666666666666666666666666666666666666",
+        "stateRoot": "0x7777777777777777777777777777777777777777777777777777777777777777"
+      }
+    }
+  }
+}

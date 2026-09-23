@@ -14,6 +14,7 @@ identity, prove finality, activate a network, or authorize asset movement.
 - External operator trust policies pinned by an independently retained SHA-256.
 - Domain-separated Ed25519 verification for exact node observations.
 - Create-once detached-signature requests and signed-bundle assembly.
+- Strict offline conversion of retained EVM JSON-RPC finalized captures.
 - `bloch-verify`: offline CLI with bounded, read-only input handling.
 - Machine-readable portfolio and delivery gates in `products/portfolio.json`.
 - Positive and adversarial tests.
@@ -43,6 +44,11 @@ The detached signing workflow is documented in
 `bloch-verify-ceremony` prepares exact bytes for an external Ed25519 signer,
 imports its raw 64-byte signature and assembles responses. It never receives a
 private key and does not implement signing.
+
+The EVM input boundary is documented in
+[`docs/EVM-RPC-CAPTURE.md`](docs/EVM-RPC-CAPTURE.md). The adapter does not make
+network requests and never treats a node's `finalized` response as independent
+consensus proof.
 
 `--require-production-qualified` intentionally exits nonzero in this version.
 Real-world organizational independence and authenticated consensus

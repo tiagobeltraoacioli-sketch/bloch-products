@@ -12,6 +12,7 @@ const TRUST_POLICY_SCHEMA: &str = "bloch.verify.operator-trust-policy.v1";
 const OBSERVATION_SIGNATURE_DOMAIN: &str = "bloch.verify.node-observation.v1";
 const SIGNING_REQUEST_SCHEMA: &str = "bloch.verify.observation-signing-request.v1";
 const SIGNED_RESPONSE_SCHEMA: &str = "bloch.verify.signed-observation-response.v1";
+const EVM_RPC_CAPTURE_SCHEMA: &str = "bloch.verify.evm-rpc-capture.v1";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VerifyError {
@@ -141,6 +142,55 @@ pub struct SignedObservationResponse {
     pub signature: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EvmRpcCapture {
+    pub schema: String,
+    pub observer_id: String,
+    pub organization_id: String,
+    pub endpoint_sha256: String,
+    pub observed_at_unix_seconds: u64,
+    pub network: String,
+    pub release_revision: String,
+    pub client_version: JsonRpcExchange,
+    pub chain_id: JsonRpcExchange,
+    pub genesis_block: JsonRpcExchange,
+    pub finalized_block: JsonRpcExchange,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct JsonRpcExchange {
+    pub request: JsonRpcRequest,
+    pub response: JsonRpcResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    pub id: u64,
+    pub result: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EvmBlockHeader {
+    number: String,
+    hash: String,
+    parent_hash: String,
+    state_root: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssessmentReport {
@@ -225,6 +275,77 @@ pub fn parse_signed_response(bytes: &[u8]) -> Result<SignedObservationResponse, 
         .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
     validate_signed_response(&response)?;
     Ok(response)
+}
+
+pub fn parse_evm_rpc_capture(bytes: &[u8]) -> Result<EvmRpcCapture, VerifyError> {
+    safe_size(bytes)?;
+    let capture: EvmRpcCapture = serde_json::from_slice(bytes)
+        .map_err(|error| VerifyError::InvalidJson(error.to_string()))?;
+    validate_evm_rpc_capture(&capture)?;
+    observation_from_evm_rpc_capture(&capture)?;
+    Ok(capture)
+}
+
+pub fn observation_from_evm_rpc_capture(
+    capture: &EvmRpcCapture,
+) -> Result<NodeObservation, VerifyError> {
+    validate_evm_rpc_capture(capture)?;
+    let chain_id = parse_quantity(
+        capture
+            .chain_id
+            .response
+            .result
+            .as_str()
+            .ok_or(VerifyError::InvalidField("evmRpcCapture.chainId.result"))?,
+        "evmRpcCapture.chainId.result",
+    )?;
+    if chain_id == 0 {
+        return Err(VerifyError::InvalidField("evmRpcCapture.chainId.result"));
+    }
+    let genesis = parse_block_header(&capture.genesis_block.response.result, "genesisBlock")?;
+    let finalized = parse_block_header(&capture.finalized_block.response.result, "finalizedBlock")?;
+    let genesis_height = parse_quantity(&genesis.number, "evmRpcCapture.genesisBlock.number")?;
+    let finalized_height =
+        parse_quantity(&finalized.number, "evmRpcCapture.finalizedBlock.number")?;
+    if genesis_height != 0 || finalized_height == 0 {
+        return Err(VerifyError::InvalidField("evmRpcCapture.blockHeight"));
+    }
+    hash32(&genesis.hash, "evmRpcCapture.genesisBlock.hash")?;
+    hash32(&finalized.hash, "evmRpcCapture.finalizedBlock.hash")?;
+    hash32(
+        &finalized.parent_hash,
+        "evmRpcCapture.finalizedBlock.parentHash",
+    )?;
+    hash32(
+        &finalized.state_root,
+        "evmRpcCapture.finalizedBlock.stateRoot",
+    )?;
+    let node_version = capture
+        .client_version
+        .response
+        .result
+        .as_str()
+        .ok_or(VerifyError::InvalidField(
+            "evmRpcCapture.clientVersion.result",
+        ))?
+        .to_owned();
+    let observation = NodeObservation {
+        observer_id: capture.observer_id.clone(),
+        organization_id: capture.organization_id.clone(),
+        endpoint_sha256: capture.endpoint_sha256.clone(),
+        observed_at_unix_seconds: capture.observed_at_unix_seconds,
+        network: capture.network.clone(),
+        chain_id,
+        genesis_hash: genesis.hash,
+        checkpoint_height: finalized_height,
+        checkpoint_block_hash: finalized.hash,
+        checkpoint_state_root: finalized.state_root,
+        claimed_finalized_height: finalized_height,
+        node_version,
+        release_revision: capture.release_revision.clone(),
+    };
+    validate_observation(&observation)?;
+    Ok(observation)
 }
 
 pub fn trust_policy_sha256(policy: &OperatorTrustPolicy) -> Result<String, VerifyError> {
@@ -683,6 +804,85 @@ fn validate_signed_response(response: &SignedObservationResponse) -> Result<(), 
     Ok(())
 }
 
+fn validate_evm_rpc_capture(capture: &EvmRpcCapture) -> Result<(), VerifyError> {
+    if capture.schema != EVM_RPC_CAPTURE_SCHEMA
+        || !valid_identifier(&capture.observer_id)
+        || !valid_identifier(&capture.organization_id)
+        || !valid_identifier(&capture.network)
+        || capture.observed_at_unix_seconds == 0
+        || !is_lower_hex(&capture.release_revision, 20, false)
+    {
+        return Err(VerifyError::InvalidField("evmRpcCapture"));
+    }
+    hash32(&capture.endpoint_sha256, "evmRpcCapture.endpointSha256")?;
+    validate_exchange(
+        &capture.client_version,
+        "web3_clientVersion",
+        &serde_json::json!([]),
+    )?;
+    validate_exchange(&capture.chain_id, "eth_chainId", &serde_json::json!([]))?;
+    validate_exchange(
+        &capture.genesis_block,
+        "eth_getBlockByNumber",
+        &serde_json::json!(["0x0", false]),
+    )?;
+    validate_exchange(
+        &capture.finalized_block,
+        "eth_getBlockByNumber",
+        &serde_json::json!(["finalized", false]),
+    )?;
+    let ids = [
+        capture.client_version.request.id,
+        capture.chain_id.request.id,
+        capture.genesis_block.request.id,
+        capture.finalized_block.request.id,
+    ];
+    if ids.into_iter().collect::<BTreeSet<_>>().len() != ids.len() {
+        return Err(VerifyError::InvalidField("evmRpcCapture.requestIds"));
+    }
+    Ok(())
+}
+
+fn validate_exchange(
+    exchange: &JsonRpcExchange,
+    method: &'static str,
+    params: &serde_json::Value,
+) -> Result<(), VerifyError> {
+    if exchange.request.jsonrpc != "2.0"
+        || exchange.response.jsonrpc != "2.0"
+        || exchange.request.id != exchange.response.id
+        || exchange.request.method != method
+        || exchange.request.params != *params
+        || exchange.response.result.is_null()
+    {
+        return Err(VerifyError::InvalidField("evmRpcCapture.exchange"));
+    }
+    Ok(())
+}
+
+fn parse_block_header(
+    value: &serde_json::Value,
+    field: &'static str,
+) -> Result<EvmBlockHeader, VerifyError> {
+    serde_json::from_value(value.clone()).map_err(|_| VerifyError::InvalidField(field))
+}
+
+fn parse_quantity(value: &str, field: &'static str) -> Result<u64, VerifyError> {
+    let Some(digits) = value.strip_prefix("0x") else {
+        return Err(VerifyError::InvalidField(field));
+    };
+    if digits.is_empty()
+        || digits.len() > 16
+        || (digits.len() > 1 && digits.starts_with('0'))
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(VerifyError::InvalidField(field));
+    }
+    u64::from_str_radix(digits, 16).map_err(|_| VerifyError::InvalidField(field))
+}
+
 fn validate_shape(bundle: &EvidenceBundle) -> Result<(), VerifyError> {
     if bundle.schema != SCHEMA {
         return Err(VerifyError::InvalidField("schema"));
@@ -1091,5 +1291,64 @@ mod tests {
             .unwrap_err(),
             VerifyError::InvalidField("responses.checkpoint")
         );
+    }
+
+    #[test]
+    fn evm_capture_converts_finalized_header_without_upgrading_its_trust() {
+        let bytes = serde_json::to_vec(&evm_capture()).unwrap();
+        let capture = parse_evm_rpc_capture(&bytes).unwrap();
+        let observation = observation_from_evm_rpc_capture(&capture).unwrap();
+        assert_eq!(observation.chain_id, 700_771);
+        assert_eq!(observation.checkpoint_height, 42);
+        assert_eq!(observation.claimed_finalized_height, 42);
+        assert_eq!(observation.node_version, "bloch-l2/v0.1.0");
+    }
+
+    #[test]
+    fn evm_capture_refuses_null_finalized_and_noncanonical_quantity() {
+        let mut capture = evm_capture();
+        capture["finalizedBlock"]["response"]["result"] = serde_json::Value::Null;
+        assert!(parse_evm_rpc_capture(&serde_json::to_vec(&capture).unwrap()).is_err());
+
+        let mut capture = evm_capture();
+        capture["chainId"]["response"]["result"] = serde_json::json!("0x0ab163");
+        assert!(parse_evm_rpc_capture(&serde_json::to_vec(&capture).unwrap()).is_err());
+    }
+
+    fn evm_capture() -> serde_json::Value {
+        fn exchange(
+            id: u64,
+            method: &str,
+            params: serde_json::Value,
+            result: serde_json::Value,
+        ) -> serde_json::Value {
+            serde_json::json!({
+                "request": {"jsonrpc": "2.0", "id": id, "method": method, "params": params},
+                "response": {"jsonrpc": "2.0", "id": id, "result": result}
+            })
+        }
+        serde_json::json!({
+            "schema": "bloch.verify.evm-rpc-capture.v1",
+            "observerId": "observer-a",
+            "organizationId": "organization-a",
+            "endpointSha256": format!("0x{}", "1".repeat(64)),
+            "observedAtUnixSeconds": 1_790_121_600u64,
+            "network": "bloch-l2",
+            "releaseRevision": format!("0x{}", "2".repeat(40)),
+            "clientVersion": exchange(1, "web3_clientVersion", serde_json::json!([]), serde_json::json!("bloch-l2/v0.1.0")),
+            "chainId": exchange(2, "eth_chainId", serde_json::json!([]), serde_json::json!("0xab163")),
+            "genesisBlock": exchange(3, "eth_getBlockByNumber", serde_json::json!(["0x0", false]), serde_json::json!({
+                "number": "0x0",
+                "hash": format!("0x{}", "3".repeat(64)),
+                "parentHash": format!("0x{}", "0".repeat(64)),
+                "stateRoot": format!("0x{}", "4".repeat(64))
+            })),
+            "finalizedBlock": exchange(4, "eth_getBlockByNumber", serde_json::json!(["finalized", false]), serde_json::json!({
+                "number": "0x2a",
+                "hash": format!("0x{}", "5".repeat(64)),
+                "parentHash": format!("0x{}", "6".repeat(64)),
+                "stateRoot": format!("0x{}", "7".repeat(64))
+            }))
+        })
     }
 }

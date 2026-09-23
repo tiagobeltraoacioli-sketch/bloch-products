@@ -7,7 +7,8 @@ will follow working implementations and retained evidence.
 2. Signed observation envelopes, detached signing requests and independently
    pinned operator trust policy — implemented; external organizational
    verification remains open.
-3. Node adapters, ancestry proofs and checkpoint collection without implicit trust in RPC.
+3. Strict offline EVM RPC capture adapter — implemented; authenticated ancestry
+   and consensus finality remain open.
 4. Indexer, versioned read API, idempotent webhooks and SDK.
 5. Non-custodial treasury policy evaluation and payment reconciliation.
 6. Read-only route risk comparison.
