@@ -70,9 +70,15 @@ identity, prove finality, activate a network, or authorize asset movement.
   exact canonical observations authenticated by domain-separated Ed25519
   signatures and explicit non-settlement reports that can never authorize
   credit or funds.
+- Pinned Ed25519 invoice-issuer policies authorize exact invoice bytes before
+  the protected reconciliation path. Threshold finality attestations bind
+  authorities to the observed block without claiming native consensus proof.
 - `bloch-pay-allocation-store`: Unix-only durable, idempotent allocation of
   authenticated observations, bound to the exact report, reconciliation policy,
-  observer and observer-policy digests. It never qualifies settlement or credit.
+  observer and observer-policy digests. Its stricter path also requires pinned
+  invoice authorization, and signed checkpoints bind complete local snapshots
+  to independently retained generation/digest expectations. None of these
+  qualify settlement, credit, replication or HA.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.

@@ -15,6 +15,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+mod checkpoint;
+pub use checkpoint::*;
+
 pub const STATE_SCHEMA: &str = "bloch.pay.allocation-store.v1";
 pub const RECEIPT_SCHEMA: &str = "bloch.pay.allocation-receipt.v1";
 pub const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
@@ -111,6 +114,8 @@ pub enum AllocationError {
     InvalidRequest(&'static str),
     #[error("authenticated report evidence is inconsistent")]
     InvalidReportEvidence,
+    #[error("authorized invoice evidence is inconsistent")]
+    InvalidInvoiceAuthorizationEvidence,
     #[error("observation is not allocated as requested by the report")]
     ReportMismatch,
     #[error("allocation conflicts with durable state")]
@@ -131,6 +136,47 @@ pub enum AllocationError {
     UnsupportedPlatform,
     #[error("allocation store I/O failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Requires both authenticated observation evidence and independently pinned
+/// invoice-authorization evidence before recording an allocation. The report
+/// digest retained by the receipt binds the complete authorization evidence.
+pub fn allocate_with_authorized_invoices(
+    store: &Path,
+    request: &AllocationRequest,
+    report: &ReconciliationReport,
+    authenticated: &AuthenticatedPaymentObservation,
+    expected_invoice_authorization_policy_sha256: &str,
+) -> Result<AllocationReceipt, AllocationError> {
+    if !valid_sha256(expected_invoice_authorization_policy_sha256)
+        || !report.invoices_authorized()
+        || report.invoice_authorization_evidence().len() != report.invoices().len()
+        || report
+            .invoice_authorization_evidence()
+            .iter()
+            .zip(report.invoices())
+            .any(|(evidence, invoice)| {
+                !evidence.authorized()
+                    || evidence.invoice_id() != invoice.invoice_id()
+                    || evidence.canonical_invoice_sha256().is_none()
+                    || evidence.issuer_id().is_none()
+                    || evidence.authorization_policy_sha256()
+                        != Some(expected_invoice_authorization_policy_sha256)
+                    || evidence.reconciliation_policy_sha256() != Some(report.policy_sha256())
+                    || evidence.authorized_at_unix_seconds().is_none()
+            })
+    {
+        return Err(AllocationError::InvalidInvoiceAuthorizationEvidence);
+    }
+    if let Some(invoice_id) = request.invoice_id.as_deref()
+        && report
+            .invoice_authorization_evidence()
+            .binary_search_by(|evidence| evidence.invoice_id().cmp(invoice_id))
+            .is_err()
+    {
+        return Err(AllocationError::InvalidInvoiceAuthorizationEvidence);
+    }
+    allocate(store, request, report, authenticated)
 }
 
 /// Durably records one allocation. An exact replay returns the byte-identical

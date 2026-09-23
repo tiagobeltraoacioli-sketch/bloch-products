@@ -3,6 +3,7 @@
 use bloch_pay_allocation_store::*;
 use bloch_pay_reconciliation::*;
 use ed25519_dalek::{Signer, SigningKey};
+use sha2::Digest;
 use std::fs::{self, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -147,6 +148,58 @@ fn raw_report_has_no_allocation_bypass() {
 }
 
 #[test]
+fn protected_allocation_requires_the_independently_pinned_invoice_authorization() {
+    let fixture = Fixture::new();
+    let request = AllocationRequest {
+        allocation_id: "protected-allocation".into(),
+        kind: AllocationKind::Matched,
+        invoice_id: Some("invoice-a".into()),
+    };
+    let arbitrary_pin = format!("0x{}", "a".repeat(64));
+    assert!(matches!(
+        allocate_with_authorized_invoices(
+            &fixture.store,
+            &request,
+            &fixture.report,
+            &fixture.authenticated,
+            &arbitrary_pin,
+        ),
+        Err(AllocationError::InvalidInvoiceAuthorizationEvidence)
+    ));
+
+    let invoice = invoice("invoice-a", "reference-aaaaaaaa");
+    let authorization_policy = invoice_authorization_policy(&fixture.key, &fixture.policy_pin);
+    let authorization_pin = invoice_authorization_policy_sha256(&authorization_policy).unwrap();
+    let authorized = authorize_invoice(
+        &fixture.key,
+        &fixture.policy,
+        &fixture.policy_pin,
+        &authorization_policy,
+        &authorization_pin,
+        &invoice,
+    );
+    let report = reconcile_authorized_invoices(
+        &fixture.policy,
+        &fixture.policy_pin,
+        &authorization_pin,
+        &[authorized],
+        std::slice::from_ref(&fixture.authenticated),
+        500,
+    )
+    .unwrap();
+    let receipt = allocate_with_authorized_invoices(
+        &fixture.store,
+        &request,
+        &report,
+        &fixture.authenticated,
+        &authorization_pin,
+    )
+    .unwrap();
+    assert_eq!(receipt.allocation_id(), "protected-allocation");
+    assert!(!receipt.settlement_qualified());
+}
+
+#[test]
 fn corruption_hardlinks_permissions_and_symlinks_are_rejected() {
     let fixture = Fixture::new();
     fixture
@@ -221,6 +274,196 @@ fn live_writer_lock_has_a_bounded_failure() {
         Err(AllocationError::StoreBusy)
     ));
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[test]
+fn signed_checkpoint_verifies_a_complete_canonical_state_copy() {
+    let fixture = Fixture::new();
+    fixture
+        .allocate("allocation-a", &fixture.authenticated)
+        .unwrap();
+    let checkpoint_key = SigningKey::from_bytes(&[29; 32]);
+    let checkpoint_policy = checkpoint_policy(&checkpoint_key, "store-primary");
+    let pin = checkpoint_policy_sha256(&checkpoint_policy).unwrap();
+    let message = checkpoint_signing_bytes(&fixture.store, &checkpoint_policy, &pin, 600).unwrap();
+    let artifact = create_checkpoint_artifact(
+        &fixture.store,
+        &checkpoint_policy,
+        &pin,
+        600,
+        &checkpoint_key.sign(&message).to_bytes(),
+    )
+    .unwrap();
+    let expected_state = fs::read(fixture.store.join("allocations.json")).unwrap();
+    let expected_digest = format!("0x{}", hex::encode(sha2::Sha256::digest(&expected_state)));
+    let verified = verify_checkpoint_artifact(
+        &artifact,
+        &checkpoint_policy,
+        &pin,
+        1,
+        &expected_digest,
+        650,
+    )
+    .unwrap();
+    assert_eq!(verified.artifact_bytes(), artifact);
+    assert_eq!(verified.store_identity(), "store-primary");
+    assert_eq!(verified.signer_id(), "checkpoint-signer-a");
+    assert_eq!(verified.generation(), 1);
+    assert_eq!(
+        verified.state_sha256(),
+        format!(
+            "0x{}",
+            hex::encode(sha2::Sha256::digest(verified.state_bytes()))
+        )
+    );
+    assert_eq!(verified.state_bytes(), expected_state);
+    assert!(!verified.high_availability_proven());
+    assert!(!verified.distributed_consistency_proven());
+}
+
+#[test]
+fn checkpoint_policy_pin_store_identity_and_signature_fail_closed() {
+    let fixture = Fixture::new();
+    fixture
+        .allocate("allocation-a", &fixture.authenticated)
+        .unwrap();
+    let key = SigningKey::from_bytes(&[29; 32]);
+    let policy = checkpoint_policy(&key, "store-primary");
+    let pin = checkpoint_policy_sha256(&policy).unwrap();
+    assert!(matches!(
+        checkpoint_signing_bytes(
+            &fixture.store,
+            &policy,
+            &format!("0x{}", "1".repeat(64)),
+            600
+        ),
+        Err(CheckpointError::PolicyPinMismatch)
+    ));
+
+    let message = checkpoint_signing_bytes(&fixture.store, &policy, &pin, 600).unwrap();
+    let wrong_key = SigningKey::from_bytes(&[30; 32]);
+    assert!(matches!(
+        create_checkpoint_artifact(
+            &fixture.store,
+            &policy,
+            &pin,
+            600,
+            &wrong_key.sign(&message).to_bytes()
+        ),
+        Err(CheckpointError::InvalidSignature)
+    ));
+
+    let artifact = create_checkpoint_artifact(
+        &fixture.store,
+        &policy,
+        &pin,
+        600,
+        &key.sign(&message).to_bytes(),
+    )
+    .unwrap();
+    let other_policy = checkpoint_policy(&key, "store-replica");
+    let other_pin = checkpoint_policy_sha256(&other_policy).unwrap();
+    assert!(matches!(
+        verify_checkpoint_artifact(
+            &artifact,
+            &other_policy,
+            &other_pin,
+            1,
+            &format!("0x{}", "1".repeat(64)),
+            650
+        ),
+        Err(CheckpointError::InvalidArtifact)
+    ));
+}
+
+#[test]
+fn checkpoint_rejects_tampering_noncanonical_encoding_and_staleness() {
+    let fixture = Fixture::new();
+    fixture
+        .allocate("allocation-a", &fixture.authenticated)
+        .unwrap();
+    let key = SigningKey::from_bytes(&[29; 32]);
+    let policy = checkpoint_policy(&key, "store-primary");
+    let pin = checkpoint_policy_sha256(&policy).unwrap();
+    let message = checkpoint_signing_bytes(&fixture.store, &policy, &pin, 600).unwrap();
+    let artifact = create_checkpoint_artifact(
+        &fixture.store,
+        &policy,
+        &pin,
+        600,
+        &key.sign(&message).to_bytes(),
+    )
+    .unwrap();
+    let state = fs::read(fixture.store.join("allocations.json")).unwrap();
+    let state_digest = format!("0x{}", hex::encode(sha2::Sha256::digest(&state)));
+
+    let mut tampered: serde_json::Value = serde_json::from_slice(&artifact).unwrap();
+    tampered["manifest"]["generation"] = serde_json::json!(2);
+    let tampered = serde_json::to_vec(&tampered).unwrap();
+    assert!(matches!(
+        verify_checkpoint_artifact(&tampered, &policy, &pin, 1, &state_digest, 650),
+        Err(CheckpointError::InvalidArtifact)
+    ));
+
+    let mut noncanonical = artifact.clone();
+    noncanonical.push(b'\n');
+    assert!(matches!(
+        verify_checkpoint_artifact(&noncanonical, &policy, &pin, 1, &state_digest, 650),
+        Err(CheckpointError::InvalidArtifact)
+    ));
+    assert!(matches!(
+        verify_checkpoint_artifact(&artifact, &policy, &pin, 1, &state_digest, 701),
+        Err(CheckpointError::OutsideValidityWindow)
+    ));
+}
+
+#[test]
+fn signed_old_checkpoint_is_rejected_against_independent_current_expectation() {
+    let fixture = Fixture::new();
+    fixture
+        .allocate("allocation-a", &fixture.authenticated)
+        .unwrap();
+    let key = SigningKey::from_bytes(&[29; 32]);
+    let policy = checkpoint_policy(&key, "store-primary");
+    let pin = checkpoint_policy_sha256(&policy).unwrap();
+    let old_message = checkpoint_signing_bytes(&fixture.store, &policy, &pin, 600).unwrap();
+    let old_artifact = create_checkpoint_artifact(
+        &fixture.store,
+        &policy,
+        &pin,
+        600,
+        &key.sign(&old_message).to_bytes(),
+    )
+    .unwrap();
+
+    let mut second = observation("observation-b", "reference-bbbbbbbb", 10, 2);
+    second.transaction_id = format!("0x{:064x}", 222_u64);
+    let authenticated = fixture.authenticate(&second);
+    let report = reconcile_authenticated(
+        &fixture.policy,
+        &fixture.policy_pin,
+        &[invoice("invoice-b", "reference-bbbbbbbb")],
+        std::slice::from_ref(&authenticated),
+        500,
+    )
+    .unwrap();
+    allocate(
+        &fixture.store,
+        &AllocationRequest {
+            allocation_id: "allocation-b".into(),
+            kind: AllocationKind::Matched,
+            invoice_id: Some("invoice-b".into()),
+        },
+        &report,
+        &authenticated,
+    )
+    .unwrap();
+    let current_state = fs::read(fixture.store.join("allocations.json")).unwrap();
+    let current_digest = format!("0x{}", hex::encode(sha2::Sha256::digest(&current_state)));
+    assert!(matches!(
+        verify_checkpoint_artifact(&old_artifact, &policy, &pin, 2, &current_digest, 650),
+        Err(CheckpointError::ExpectationMismatch)
+    ));
 }
 
 struct Fixture {
@@ -372,6 +615,81 @@ fn observer_policy(key: &SigningKey, reconciliation_policy_sha256: &str) -> Obse
             network: "bloch-l2".into(),
             ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().to_bytes())),
         }],
+    }
+}
+
+fn invoice_authorization_policy(
+    key: &SigningKey,
+    reconciliation_policy_sha256: &str,
+) -> InvoiceAuthorizationPolicy {
+    InvoiceAuthorizationPolicy {
+        schema: INVOICE_AUTHORIZATION_POLICY_SCHEMA.into(),
+        policy_id: "invoice-policy-a".into(),
+        signature_domain: "bloch-pay-invoice-production".into(),
+        reconciliation_policy_sha256: reconciliation_policy_sha256.into(),
+        tenant_id: "tenant-a".into(),
+        merchant_id: "merchant-a".into(),
+        effective_at_unix_seconds: 100,
+        expires_at_unix_seconds: 10_000,
+        issuers: vec![TrustedInvoiceIssuer {
+            issuer_id: "issuer-a".into(),
+            route_ids: vec!["route-a".into()],
+            ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().to_bytes())),
+        }],
+    }
+}
+
+fn authorize_invoice(
+    key: &SigningKey,
+    reconciliation_policy: &ReconciliationPolicy,
+    reconciliation_pin: &str,
+    authorization_policy: &InvoiceAuthorizationPolicy,
+    authorization_pin: &str,
+    invoice: &Invoice,
+) -> AuthorizedInvoice {
+    let message = invoice_authorization_signing_bytes(
+        reconciliation_policy,
+        reconciliation_pin,
+        authorization_policy,
+        authorization_pin,
+        "issuer-a",
+        invoice,
+        250,
+    )
+    .unwrap();
+    let envelope = encode_invoice_authorization_envelope(
+        reconciliation_policy,
+        reconciliation_pin,
+        authorization_policy,
+        authorization_pin,
+        "issuer-a",
+        invoice,
+        250,
+        &key.sign(&message).to_bytes(),
+    )
+    .unwrap();
+    verify_authorized_invoice(
+        &envelope,
+        reconciliation_policy,
+        reconciliation_pin,
+        authorization_policy,
+        authorization_pin,
+        invoice,
+    )
+    .unwrap()
+}
+
+fn checkpoint_policy(key: &SigningKey, store_identity: &str) -> CheckpointTrustPolicy {
+    CheckpointTrustPolicy {
+        schema: CHECKPOINT_POLICY_SCHEMA.into(),
+        policy_id: "checkpoint-policy-a".into(),
+        signature_domain: "bloch-pay-checkpoint-production".into(),
+        store_identity: store_identity.into(),
+        signer_id: "checkpoint-signer-a".into(),
+        ed25519_public_key: format!("0x{}", hex::encode(key.verifying_key().to_bytes())),
+        effective_at_unix_seconds: 100,
+        expires_at_unix_seconds: 10_000,
+        max_checkpoint_age_seconds: 100,
     }
 }
 

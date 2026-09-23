@@ -21,7 +21,7 @@
       "id": "bloch-treasury-pay",
       "priority": "P2",
       "status": "core-in-development",
-      "capabilities": ["canonical-invoices", "pinned-payment-routes", "pinned-ed25519-observer-policy", "authenticated-observation-reconciliation", "partial-exact-excess-late-reporting", "durable-local-allocation-idempotency"],
+      "capabilities": ["canonical-invoices", "pinned-payment-routes", "pinned-ed25519-observer-policy", "authenticated-observation-reconciliation", "pinned-invoice-issuer-policy", "authorized-invoice-reconciliation", "threshold-finality-attestations", "partial-exact-excess-late-reporting", "durable-local-allocation-idempotency", "signed-allocation-checkpoints"],
       "gates": ["qualified-independent-observers", "qualified-finality-receipts", "distributed-allocation-ha", "hardened-policy-wallet", "complete-indexing", "documented-credit-policy", "authorized-payment-partners"]
     },
     {

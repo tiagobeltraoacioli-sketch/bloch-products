@@ -34,10 +34,14 @@ will follow working implementations and retained evidence.
 6. Non-custodial payment reconciliation — deterministic invoice/observation
    matching with pinned routes and permanently false settlement/credit claims is
    implemented. Exact observations can be authenticated against pinned Ed25519
-   observer policies and flow through authenticated reconciliation into a
-   durable local idempotent allocation store. Observer independence and
-   qualification, network finality, distributed allocation HA, policy-wallet
-   execution, bank/Pix integration and credit policy remain open.
+   observer policies; exact invoices can be authorized against pinned issuer
+   policies. Both flow through a protected reconciliation path into a durable
+   local idempotent allocation store, whose complete snapshots can be signed
+   and checked against independent generation/digest expectations. Per-network
+   authority thresholds can attest the exact observed block without claiming
+   native consensus finality. Observer independence and qualification,
+   consensus/ancestry proof, distributed allocation HA, hardened policy-wallet
+   operation, bank/Pix integration and credit policy remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

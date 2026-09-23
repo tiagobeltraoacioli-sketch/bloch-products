@@ -10,6 +10,10 @@ use thiserror::Error;
 
 mod authentication;
 pub use authentication::*;
+mod finality;
+pub use finality::*;
+mod invoice_authorization;
+pub use invoice_authorization::*;
 
 pub const POLICY_SCHEMA: &str = "bloch.pay.reconciliation-policy.v1";
 pub const INVOICE_SCHEMA: &str = "bloch.pay.invoice.v1";
@@ -166,6 +170,8 @@ pub struct ReconciliationReport {
     unmatched_observation_ids: Vec<String>,
     observations_authenticated: bool,
     observation_evidence: Vec<ObservationEvidenceRef>,
+    invoices_authorized: bool,
+    invoice_authorization_evidence: Vec<InvoiceAuthorizationEvidenceRef>,
     settlement_qualified: bool,
     credit_authorized: bool,
 }
@@ -186,11 +192,25 @@ impl ReconciliationReport {
     pub fn observation_evidence(&self) -> &[ObservationEvidenceRef] {
         &self.observation_evidence
     }
+    pub fn invoices_authorized(&self) -> bool {
+        self.invoices_authorized
+    }
+    pub fn invoice_authorization_evidence(&self) -> &[InvoiceAuthorizationEvidenceRef] {
+        &self.invoice_authorization_evidence
+    }
     pub fn settlement_qualified(&self) -> bool {
         self.settlement_qualified
     }
     pub fn credit_authorized(&self) -> bool {
         self.credit_authorized
+    }
+
+    pub(crate) fn record_authorized_invoices(
+        &mut self,
+        evidence: Vec<InvoiceAuthorizationEvidenceRef>,
+    ) {
+        self.invoices_authorized = true;
+        self.invoice_authorization_evidence = evidence;
     }
 }
 
@@ -486,6 +506,10 @@ fn reconcile_inner(
     }
     unmatched.sort();
     observation_evidence.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
+    let invoice_authorization_evidence = results
+        .iter()
+        .map(|invoice| InvoiceAuthorizationEvidenceRef::unauthenticated(invoice.invoice_id.clone()))
+        .collect();
     Ok(ReconciliationReport {
         schema: REPORT_SCHEMA.into(),
         policy_sha256: policy_sha256(policy)?,
@@ -494,6 +518,8 @@ fn reconcile_inner(
         unmatched_observation_ids: unmatched,
         observations_authenticated,
         observation_evidence,
+        invoices_authorized: false,
+        invoice_authorization_evidence,
         settlement_qualified: false,
         credit_authorized: false,
     })

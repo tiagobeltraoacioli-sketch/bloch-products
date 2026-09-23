@@ -57,14 +57,29 @@ The Unix-only allocation store persists an authenticated allocation under a
 bounded single-writer lock. It rejects conflicting allocation IDs, observation
 IDs and network transaction/event identities; exact retries return the same
 receipt. This is local crash-safe idempotency, not distributed consistency.
+The stricter allocation API additionally refuses reports without exact,
+independently pinned invoice-authorization evidence.
+
+Invoice issuance can now be authenticated offline against a pinned Ed25519
+issuer policy bound to tenant, merchant, routes and the reconciliation policy.
+The protected reconciliation path accepts only opaque authorized invoices and
+retains their issuer/policy/digest evidence in the report. Operational key
+custody, revocation and approval governance remain external gates.
+
+A separate threshold-attestation path verifies that configured authorities
+signed the exact observed block under a pinned per-network policy. It
+deliberately keeps `networkFinalityQualified` false because signatures from
+configured authorities are not a native consensus or ancestry proof.
 
 ## Remaining production gates
 
 - operational qualification and independence of the configured observers;
-- network-specific canonical ancestry and settlement/finality evidence;
+- network-native canonical ancestry and consensus-finality evidence (threshold
+  authority attestations are implemented but do not close this gate);
 - distributed allocation consistency and high availability across hosts and
   databases (the current durable store is single-host);
-- invoice issuance authorization and policy-wallet/HSM integration;
+- hardened external policy-wallet/HSM operation, issuer revocation and key
+  lifecycle controls;
 - privacy-governed storage and controlled customer/merchant APIs;
 - refunds, disputes, cancellations, currency/asset metadata governance and
   accounting exports;
