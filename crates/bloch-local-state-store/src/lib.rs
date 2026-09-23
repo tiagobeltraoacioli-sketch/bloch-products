@@ -90,6 +90,10 @@ pub enum StoreError {
     ExpectationMismatch,
     #[error("local state generation conflicts with durable state")]
     GenerationConflict,
+    #[error("a different prepared state already exists")]
+    PreparedStateConflict,
+    #[error("the exact prepared state is missing")]
+    PreparedStateMissing,
     #[error("local state store is busy")]
     StoreBusy,
     #[error("local state exceeds the bounded store")]
@@ -153,6 +157,9 @@ pub fn write_state(
     verify_store_path(store, &directory)?;
     cleanup_stale_temporary_files(&directory)?;
     let current = read_state(&directory)?;
+    if read_named_state(&directory, "pending.json")?.is_some() {
+        return Err(StoreError::PreparedStateConflict);
+    }
 
     match current {
         None if expected_previous.is_none() && generation == 0 => {}
@@ -164,6 +171,7 @@ pub fn write_state(
             previous_root_sha256: predecessor,
         }) if root == next && bytes == state => {
             if predecessor == next.previous_root_sha256 {
+                verify_store_path(store, &directory)?;
                 return Ok(root);
             }
             return Err(StoreError::ExpectationMismatch);
@@ -204,6 +212,191 @@ pub fn write_state(
     Ok(next)
 }
 
+/// Durably stages the next generation without replacing the admitted current
+/// state. The returned root must be externally checkpointed and accepted by a
+/// monotonic authority before `promote_prepared_state` is called.
+#[cfg(unix)]
+pub fn prepare_state(
+    store: &Path,
+    state_identity: &str,
+    generation: u64,
+    state: &[u8],
+    expected_current: &StateRoot,
+) -> Result<StateRoot, StoreError> {
+    validate_identity(state_identity)?;
+    validate_root(expected_current)?;
+    if expected_current.state_identity != state_identity {
+        return Err(StoreError::ExpectationMismatch);
+    }
+    if state.is_empty() {
+        return Err(StoreError::InvalidInput("state"));
+    }
+    if state.len() > MAX_STATE_BYTES {
+        return Err(StoreError::StoreFull);
+    }
+    if generation
+        != expected_current
+            .generation
+            .checked_add(1)
+            .ok_or(StoreError::GenerationConflict)?
+    {
+        return Err(StoreError::GenerationConflict);
+    }
+    let next = StateRoot {
+        schema: STATE_ROOT_SCHEMA.to_owned(),
+        state_identity: state_identity.to_owned(),
+        generation,
+        state_sha256: hash(state),
+        previous_root_sha256: Some(root_hash(expected_current)?),
+    };
+    let directory = open_store(store, false)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    cleanup_stale_temporary_files(&directory)?;
+    let current = read_state(&directory)?.ok_or(StoreError::StateMissing)?;
+    if &current.root != expected_current {
+        return Err(StoreError::ExpectationMismatch);
+    }
+    if let Some(prepared) = read_named_state(&directory, "pending.json")? {
+        return if prepared.root == next
+            && prepared.bytes == state
+            && prepared.previous_root_sha256 == next.previous_root_sha256
+        {
+            verify_store_path(store, &directory)?;
+            Ok(next)
+        } else {
+            Err(StoreError::PreparedStateConflict)
+        };
+    }
+    let envelope = StateEnvelope {
+        schema: STATE_STORE_SCHEMA.to_owned(),
+        state_identity: next.state_identity.clone(),
+        generation: next.generation,
+        state_sha256: next.state_sha256.clone(),
+        previous_root_sha256: next.previous_root_sha256.clone(),
+        state_hex: hex::encode(state),
+    };
+    let bytes = serde_json::to_vec(&envelope).map_err(|_| StoreError::InvalidState)?;
+    atomic_replace(&directory, "pending.json", &bytes)?;
+    let prepared =
+        read_named_state(&directory, "pending.json")?.ok_or(StoreError::PreparedStateMissing)?;
+    if prepared.root != next || prepared.bytes != state {
+        return Err(StoreError::InvalidState);
+    }
+    verify_store_path(store, &directory)?;
+    Ok(next)
+}
+
+#[cfg(not(unix))]
+pub fn prepare_state(
+    _store: &Path,
+    _state_identity: &str,
+    _generation: u64,
+    _state: &[u8],
+    _expected_current: &StateRoot,
+) -> Result<StateRoot, StoreError> {
+    Err(StoreError::UnsupportedPlatform)
+}
+
+/// Atomically promotes only the exact externally authorized prepared root.
+/// Repeating an already completed promotion is idempotent.
+#[cfg(unix)]
+pub fn promote_prepared_state(
+    store: &Path,
+    expected_current: &StateRoot,
+    authorized_next: &StateRoot,
+) -> Result<StateRoot, StoreError> {
+    validate_root(expected_current)?;
+    validate_root(authorized_next)?;
+    let expected_predecessor = root_hash(expected_current)?;
+    if expected_current.state_identity != authorized_next.state_identity
+        || authorized_next.generation
+            != expected_current
+                .generation
+                .checked_add(1)
+                .ok_or(StoreError::GenerationConflict)?
+        || authorized_next.previous_root_sha256.as_deref() != Some(expected_predecessor.as_str())
+    {
+        return Err(StoreError::ExpectationMismatch);
+    }
+    let directory = open_store(store, false)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    cleanup_stale_temporary_files(&directory)?;
+    let current = read_state(&directory)?.ok_or(StoreError::StateMissing)?;
+    if current.root == *authorized_next {
+        if let Some(prepared) = read_named_state(&directory, "pending.json")? {
+            if prepared.root != *authorized_next {
+                return Err(StoreError::PreparedStateConflict);
+            }
+            remove_named_file(&directory, "pending.json")?;
+        }
+        verify_store_path(store, &directory)?;
+        return Ok(authorized_next.clone());
+    }
+    if current.root != *expected_current {
+        return Err(StoreError::ExpectationMismatch);
+    }
+    let prepared =
+        read_named_state(&directory, "pending.json")?.ok_or(StoreError::PreparedStateMissing)?;
+    if prepared.root != *authorized_next {
+        return Err(StoreError::PreparedStateConflict);
+    }
+    rename_state_file(&directory, "pending.json", "state.json")?;
+    let published = read_state(&directory)?.ok_or(StoreError::StateMissing)?;
+    if published.root != *authorized_next || published.bytes != prepared.bytes {
+        return Err(StoreError::InvalidState);
+    }
+    verify_store_path(store, &directory)?;
+    Ok(authorized_next.clone())
+}
+
+/// Removes only an exact abandoned prepared state while the current state
+/// still matches its independently retained root. Call this only after the
+/// external authority has conclusively rejected or abandoned the candidate.
+#[cfg(unix)]
+pub fn discard_prepared_state(
+    store: &Path,
+    expected_current: &StateRoot,
+    expected_prepared: &StateRoot,
+) -> Result<(), StoreError> {
+    validate_root(expected_current)?;
+    validate_root(expected_prepared)?;
+    let directory = open_store(store, false)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    cleanup_stale_temporary_files(&directory)?;
+    let current = read_state(&directory)?.ok_or(StoreError::StateMissing)?;
+    if current.root != *expected_current {
+        return Err(StoreError::ExpectationMismatch);
+    }
+    let prepared =
+        read_named_state(&directory, "pending.json")?.ok_or(StoreError::PreparedStateMissing)?;
+    if prepared.root != *expected_prepared {
+        return Err(StoreError::PreparedStateConflict);
+    }
+    remove_named_file(&directory, "pending.json")?;
+    verify_store_path(store, &directory)
+}
+
+#[cfg(not(unix))]
+pub fn discard_prepared_state(
+    _store: &Path,
+    _expected_current: &StateRoot,
+    _expected_prepared: &StateRoot,
+) -> Result<(), StoreError> {
+    Err(StoreError::UnsupportedPlatform)
+}
+
+#[cfg(not(unix))]
+pub fn promote_prepared_state(
+    _store: &Path,
+    _expected_current: &StateRoot,
+    _authorized_next: &StateRoot,
+) -> Result<StateRoot, StoreError> {
+    Err(StoreError::UnsupportedPlatform)
+}
+
 #[cfg(not(unix))]
 pub fn write_state(
     _store: &Path,
@@ -227,6 +420,7 @@ pub fn load_state(store: &Path, expected: &StateRoot) -> Result<Vec<u8>, StoreEr
     if &stored.root != expected {
         return Err(StoreError::ExpectationMismatch);
     }
+    verify_store_path(store, &directory)?;
     Ok(stored.bytes)
 }
 
@@ -465,8 +659,13 @@ fn validate_named_file(
 
 #[cfg(unix)]
 fn read_state(directory: &File) -> Result<Option<StoredState>, StoreError> {
+    read_named_state(directory, "state.json")
+}
+
+#[cfg(unix)]
+fn read_named_state(directory: &File, file_name: &str) -> Result<Option<StoredState>, StoreError> {
     use std::os::fd::{AsRawFd, FromRawFd};
-    let name = c_name("state.json")?;
+    let name = c_name(file_name)?;
     let fd = unsafe {
         libc::openat(
             directory.as_raw_fd(),
@@ -484,14 +683,14 @@ fn read_state(directory: &File) -> Result<Option<StoredState>, StoreError> {
     let mut file = unsafe { File::from_raw_fd(fd) };
     let metadata = file.metadata()?;
     validate_file(&metadata, true)?;
-    validate_named_file(directory, "state.json", &metadata)?;
+    validate_named_file(directory, file_name, &metadata)?;
     let mut serialized = Vec::with_capacity(metadata.len() as usize);
     Read::by_ref(&mut file)
         .take(MAX_ENVELOPE_BYTES + 1)
         .read_to_end(&mut serialized)?;
     let after = file.metadata()?;
     validate_file(&after, true)?;
-    validate_named_file(directory, "state.json", &after)?;
+    validate_named_file(directory, file_name, &after)?;
     if !same_object(&metadata, &after)
         || metadata.len() != after.len()
         || serialized.len() as u64 != after.len()
@@ -583,6 +782,52 @@ fn atomic_replace(directory: &File, name: &str, bytes: &[u8]) -> Result<(), Stor
 }
 
 #[cfg(unix)]
+fn rename_state_file(directory: &File, source: &str, destination: &str) -> Result<(), StoreError> {
+    use std::os::fd::AsRawFd;
+    let source = c_name(source)?;
+    let destination_name = destination;
+    let destination = c_name(destination)?;
+    if unsafe {
+        libc::renameat(
+            directory.as_raw_fd(),
+            source.as_ptr(),
+            directory.as_raw_fd(),
+            destination.as_ptr(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    directory.sync_all()?;
+    validate_destination(directory, destination_name)
+}
+
+#[cfg(unix)]
+fn remove_named_file(directory: &File, name: &str) -> Result<(), StoreError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let name_c = c_name(name)?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name_c.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    validate_file(&metadata, true)?;
+    validate_named_file(directory, name, &metadata)?;
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name_c.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
 fn validate_destination(directory: &File, name: &str) -> Result<(), StoreError> {
     use std::os::fd::{AsRawFd, FromRawFd};
     let name_c = c_name(name)?;
@@ -645,7 +890,10 @@ fn cleanup_stale_temporary_files(directory: &File) -> Result<(), StoreError> {
             let Ok(name) = name.to_str() else {
                 continue;
             };
-            let Some(suffix) = name.strip_prefix(".state.json.tmp-") else {
+            let suffix = name
+                .strip_prefix(".state.json.tmp-")
+                .or_else(|| name.strip_prefix(".pending.json.tmp-"));
+            let Some(suffix) = suffix else {
                 continue;
             };
             if suffix.len() != 32
@@ -903,5 +1151,188 @@ mod tests {
         assert!(!stale.exists());
         assert_eq!(load_state(&path, &root1).unwrap(), b"one");
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn prepared_state_does_not_replace_current_until_exact_promotion() {
+        let path = temporary_path("prepare-promote");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let root1 = prepare_state(&path, "data:one", 1, b"one", &root0).unwrap();
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        assert!(path.join("pending.json").is_file());
+        assert_eq!(
+            prepare_state(&path, "data:one", 1, b"one", &root0).unwrap(),
+            root1
+        );
+        assert!(matches!(
+            prepare_state(&path, "data:one", 1, b"different", &root0),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        assert_eq!(
+            promote_prepared_state(&path, &root0, &root1).unwrap(),
+            root1
+        );
+        assert_eq!(load_state(&path, &root1).unwrap(), b"one");
+        assert!(!path.join("pending.json").exists());
+        assert_eq!(
+            promote_prepared_state(&path, &root0, &root1).unwrap(),
+            root1
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn promotion_rejects_a_fork_even_when_generation_is_next() {
+        let path = temporary_path("prepare-fork");
+        let other = temporary_path("prepare-fork-other");
+        let root0 = write_state(&path, "pay:one", 0, b"zero", None).unwrap();
+        let other_root0 = write_state(&other, "pay:one", 0, b"zero", None).unwrap();
+        assert_eq!(root0, other_root0);
+        let prepared = prepare_state(&path, "pay:one", 1, b"authorized", &root0).unwrap();
+        let fork = write_state(&other, "pay:one", 1, b"fork", Some(&other_root0)).unwrap();
+        assert!(matches!(
+            promote_prepared_state(&path, &root0, &fork),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        assert_eq!(
+            promote_prepared_state(&path, &root0, &prepared).unwrap(),
+            prepared
+        );
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(other).unwrap();
+    }
+
+    #[test]
+    fn direct_writer_cannot_bypass_a_prepared_transition() {
+        let path = temporary_path("prepare-bypass");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let prepared = prepare_state(&path, "data:one", 1, b"candidate", &root0).unwrap();
+        assert!(matches!(
+            write_state(&path, "data:one", 1, b"candidate", Some(&root0)),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        assert!(matches!(
+            write_state(&path, "data:one", 1, b"fork", Some(&root0)),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        assert_eq!(
+            promote_prepared_state(&path, &root0, &prepared).unwrap(),
+            prepared
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn abandoned_prepared_state_requires_exact_discard_cas() {
+        let path = temporary_path("prepare-discard");
+        let other = temporary_path("prepare-discard-other");
+        let root0 = write_state(&path, "pay:one", 0, b"zero", None).unwrap();
+        let prepared = prepare_state(&path, "pay:one", 1, b"candidate", &root0).unwrap();
+        let other_root0 = write_state(&other, "pay:one", 0, b"zero", None).unwrap();
+        let fork = write_state(&other, "pay:one", 1, b"fork", Some(&other_root0)).unwrap();
+        assert!(matches!(
+            discard_prepared_state(&path, &root0, &fork),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        discard_prepared_state(&path, &root0, &prepared).unwrap();
+        assert!(!path.join("pending.json").exists());
+        assert!(matches!(
+            discard_prepared_state(&path, &root0, &prepared),
+            Err(StoreError::PreparedStateMissing)
+        ));
+        let replacement = prepare_state(&path, "pay:one", 1, b"replacement", &root0).unwrap();
+        assert_ne!(replacement, prepared);
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(other).unwrap();
+    }
+
+    #[test]
+    fn prepared_symlinks_and_hardlinks_fail_closed_without_replacing_current() {
+        let path = temporary_path("pending-objects");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let prepared = prepare_state(&path, "data:one", 1, b"one", &root0).unwrap();
+        let pending = path.join("pending.json");
+        let alias = path.join("pending-alias.json");
+        std::fs::hard_link(&pending, &alias).unwrap();
+        assert!(matches!(
+            promote_prepared_state(&path, &root0, &prepared),
+            Err(StoreError::UnsafeStore(_))
+        ));
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+
+        std::fs::remove_file(alias).unwrap();
+        std::fs::remove_file(&pending).unwrap();
+        symlink(path.join("state.json"), &pending).unwrap();
+        assert!(promote_prepared_state(&path, &root0, &prepared).is_err());
+        assert!(write_state(&path, "data:one", 1, b"one", Some(&root0)).is_err());
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn discard_cleans_interrupted_pending_temporary_files() {
+        let path = temporary_path("discard-temp");
+        let root0 = write_state(&path, "pay:one", 0, b"zero", None).unwrap();
+        let prepared = prepare_state(&path, "pay:one", 1, b"one", &root0).unwrap();
+        let stale = path.join(".pending.json.tmp-0123456789abcdef0123456789abcdef");
+        std::fs::write(&stale, b"interrupted-pending-state").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        discard_prepared_state(&path, &root0, &prepared).unwrap();
+        assert!(!stale.exists());
+        assert!(!path.join("pending.json").exists());
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn externally_accepted_root_without_pending_bytes_fails_closed() {
+        let path = temporary_path("accepted-missing-pending");
+        let root0 = write_state(&path, "data:one", 0, b"zero", None).unwrap();
+        let root1 = prepare_state(&path, "data:one", 1, b"one", &root0).unwrap();
+        std::fs::remove_file(path.join("pending.json")).unwrap();
+
+        assert!(matches!(
+            promote_prepared_state(&path, &root0, &root1),
+            Err(StoreError::PreparedStateMissing)
+        ));
+        assert_eq!(load_state(&path, &root0).unwrap(), b"zero");
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn completed_promotion_never_discards_a_conflicting_pending_replay() {
+        let path = temporary_path("promoted-conflict");
+        let fork_path = temporary_path("promoted-conflict-fork");
+        let root0 = write_state(&path, "pay:one", 0, b"zero", None).unwrap();
+        let fork_root0 = write_state(&fork_path, "pay:one", 0, b"zero", None).unwrap();
+        let root1 = prepare_state(&path, "pay:one", 1, b"accepted", &root0).unwrap();
+        promote_prepared_state(&path, &root0, &root1).unwrap();
+        let fork = write_state(&fork_path, "pay:one", 1, b"fork", Some(&fork_root0)).unwrap();
+        assert_ne!(root1, fork);
+
+        let pending = path.join("pending.json");
+        std::fs::copy(fork_path.join("state.json"), &pending).unwrap();
+        std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            promote_prepared_state(&path, &root0, &root1),
+            Err(StoreError::PreparedStateConflict)
+        ));
+        assert!(pending.exists());
+        assert_eq!(load_state(&path, &root1).unwrap(), b"accepted");
+
+        std::fs::remove_file(&pending).unwrap();
+        std::fs::copy(path.join("state.json"), &pending).unwrap();
+        std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            promote_prepared_state(&path, &root0, &root1).unwrap(),
+            root1
+        );
+        assert!(!pending.exists());
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::remove_dir_all(fork_path).unwrap();
     }
 }

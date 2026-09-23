@@ -1,0 +1,20 @@
+[package]
+name = "bloch-local-state-admission"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-data-governance = { path = "../bloch-data-governance" }
+bloch-local-state-checkpoint = { path = "../bloch-local-state-checkpoint" }
+bloch-local-state-cursor = { path = "../bloch-local-state-cursor" }
+bloch-local-state-store = { path = "../bloch-local-state-store" }
+bloch-pay-adjustments = { path = "../bloch-pay-adjustments" }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

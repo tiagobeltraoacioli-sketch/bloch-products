@@ -188,12 +188,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloch-local-state-admission"
+version = "0.1.0"
+dependencies = [
+ "bloch-data-governance",
+ "bloch-local-state-checkpoint",
+ "bloch-local-state-cursor",
+ "bloch-local-state-store",
+ "bloch-pay-adjustments",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "bloch-local-state-checkpoint"
 version = "0.1.0"
 dependencies = [
  "bloch-local-state-store",
  "ed25519-dalek",
  "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "bloch-local-state-cursor"
+version = "0.1.0"
+dependencies = [
+ "bloch-local-state-checkpoint",
+ "bloch-local-state-store",
+ "ed25519-dalek",
+ "getrandom",
+ "hex",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

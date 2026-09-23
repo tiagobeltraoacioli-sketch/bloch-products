@@ -90,13 +90,23 @@ identity, prove finality, activate a network, or authorize asset movement.
   recovery requires independent digest, generation, policy and payment roots.
 - `bloch-local-state-store`: common Unix-only, bounded persistence for exact
   Bloch Data and Bloch Pay state bytes, with owner-only files, bounded locking,
-  compare-and-swap generations, atomic `fsync` replacement and independently
-  retained anti-rollback roots. It provides neither encryption nor HA, and the
-  product crates still perform semantic and signature validation after load.
+  compare-and-swap generations, atomic `fsync` replacement and a two-phase
+  prepare/promote path for externally authorized updates. It provides neither
+  encryption nor HA, and the product crates still perform semantic and
+  signature validation after load.
 - `bloch-local-state-checkpoint`: domain-separated threshold Ed25519
-  authentication for exact local-state roots. Signing remains external; exact
-  generation and digest expectations must come from an independent monotonic
-  control plane, and multiple keys do not prove operator independence.
+  authentication for exact local-state roots and their product-specific
+  semantic-manifest digest. Signing remains external, and multiple keys do not
+  prove operator independence.
+- `bloch-local-state-cursor`: canonical single-host cursor with exact replay,
+  immediate-successor and predecessor checks. The independently authenticated
+  current cursor must still come from an off-host monotonic control plane; a
+  local cursor alone cannot defeat same-host rollback or provide HA.
+- `bloch-local-state-admission`: read-only startup composition for Data and Pay
+  that binds a retained threshold checkpoint, independently supplied exact
+  cursor, product-specific semantic manifest and exact local state before
+  replaying the product restore logic. Production writers still require a
+  shared outer coordinator across the cursor and state stores.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.

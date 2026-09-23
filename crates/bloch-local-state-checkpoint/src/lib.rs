@@ -11,12 +11,12 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 pub const POLICY_SCHEMA: &str = "bloch.products.local-state-checkpoint-policy.v1";
-pub const MANIFEST_SCHEMA: &str = "bloch.products.local-state-checkpoint-manifest.v1";
-pub const ARTIFACT_SCHEMA: &str = "bloch.products.local-state-checkpoint-artifact.v1";
+pub const MANIFEST_SCHEMA: &str = "bloch.products.local-state-checkpoint-manifest.v2";
+pub const ARTIFACT_SCHEMA: &str = "bloch.products.local-state-checkpoint-artifact.v2";
 pub const MAX_POLICY_BYTES: usize = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: usize = 64 * 1024;
 const MAX_AUTHORITIES: usize = 16;
-const SIGNING_PREFIX: &[u8] = b"BLOCH-PRODUCTS-LOCAL-STATE-CHECKPOINT-V1\0";
+const SIGNING_PREFIX: &[u8] = b"BLOCH-PRODUCTS-LOCAL-STATE-CHECKPOINT-V2\0";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -52,6 +52,7 @@ struct CheckpointManifest {
     schema: String,
     checkpoint_policy_sha256: String,
     checkpoint_domain: String,
+    semantic_manifest_sha256: String,
     state_root: StateRoot,
     created_at_unix_seconds: u64,
 }
@@ -69,6 +70,7 @@ pub struct VerifiedRootCheckpoint {
     root: StateRoot,
     checkpoint_policy_sha256: String,
     checkpoint_sha256: String,
+    semantic_manifest_sha256: String,
     created_at_unix_seconds: u64,
     authority_ids: Vec<String>,
 }
@@ -82,6 +84,12 @@ impl VerifiedRootCheckpoint {
     }
     pub fn checkpoint_sha256(&self) -> &str {
         &self.checkpoint_sha256
+    }
+    /// Digest signed by checkpoint authorities. This exposes authentication,
+    /// not semantic correctness; the referenced manifest must be obtained and
+    /// validated independently by the product admission layer.
+    pub fn semantic_manifest_sha256(&self) -> &str {
+        &self.semantic_manifest_sha256
     }
     pub fn created_at_unix_seconds(&self) -> u64 {
         self.created_at_unix_seconds
@@ -115,7 +123,7 @@ pub enum CheckpointError {
     ThresholdNotMet,
     #[error("checkpoint is outside the policy validity window")]
     OutsideValidityWindow,
-    #[error("checkpoint does not match the independently expected root")]
+    #[error("checkpoint does not match the independently expected root or semantic manifest")]
     ExpectationMismatch,
 }
 
@@ -153,12 +161,14 @@ pub fn checkpoint_signature_message(
     root: &StateRoot,
     policy: &CheckpointPolicy,
     expected_policy_sha256: &str,
+    semantic_manifest_sha256: &str,
     created_at_unix_seconds: u64,
 ) -> Result<Vec<u8>, CheckpointError> {
     let manifest = manifest(
         root,
         policy,
         expected_policy_sha256,
+        semantic_manifest_sha256,
         created_at_unix_seconds,
     )?;
     signing_bytes(&manifest)
@@ -170,6 +180,7 @@ pub fn create_root_checkpoint(
     root: &StateRoot,
     policy: &CheckpointPolicy,
     expected_policy_sha256: &str,
+    semantic_manifest_sha256: &str,
     created_at_unix_seconds: u64,
     signatures: &[DetachedCheckpointSignature],
 ) -> Result<Vec<u8>, CheckpointError> {
@@ -177,6 +188,7 @@ pub fn create_root_checkpoint(
         root,
         policy,
         expected_policy_sha256,
+        semantic_manifest_sha256,
         created_at_unix_seconds,
     )?;
     let message = signing_bytes(&manifest)?;
@@ -195,21 +207,82 @@ pub fn create_root_checkpoint(
     Ok(bytes)
 }
 
-/// Verifies authentication, freshness and exact anti-rollback expectations.
-/// The expected generation must come from outside the state-store host.
+/// Verifies authentication and freshness against partial root expectations.
+///
+/// Generation and state digest do not pin root identity or predecessor. Use
+/// [`verify_root_checkpoint_exact`] when an independently retained complete
+/// root is available, or compose [`authenticate_root_checkpoint`] with an
+/// independently authenticated monotonic cursor.
 pub fn verify_root_checkpoint(
     artifact_bytes: &[u8],
     policy: &CheckpointPolicy,
     expected_policy_sha256: &str,
     expected_generation: u64,
     expected_state_sha256: &str,
+    expected_semantic_manifest_sha256: &str,
     evaluated_at_unix_seconds: u64,
 ) -> Result<VerifiedRootCheckpoint, CheckpointError> {
-    validate_policy_pin(policy, expected_policy_sha256)?;
-    if artifact_bytes.is_empty()
-        || artifact_bytes.len() > MAX_ARTIFACT_BYTES
-        || !valid_sha256(expected_state_sha256)
+    let verified = authenticate_root_checkpoint(
+        artifact_bytes,
+        policy,
+        expected_policy_sha256,
+        evaluated_at_unix_seconds,
+    )?;
+    if verified.root().generation() != expected_generation
+        || verified.root().state_sha256() != expected_state_sha256
+        || verified.semantic_manifest_sha256() != expected_semantic_manifest_sha256
     {
+        return Err(CheckpointError::ExpectationMismatch);
+    }
+    Ok(verified)
+}
+
+/// Authenticates a canonical checkpoint without making an anti-rollback claim.
+///
+/// This is intended for composition with an independently durable monotonic
+/// cursor that subsequently admits the returned root and its lineage. A caller
+/// that lacks such a cursor must use [`verify_root_checkpoint_exact`] instead.
+pub fn authenticate_root_checkpoint(
+    artifact_bytes: &[u8],
+    policy: &CheckpointPolicy,
+    expected_policy_sha256: &str,
+    evaluated_at_unix_seconds: u64,
+) -> Result<VerifiedRootCheckpoint, CheckpointError> {
+    let verified =
+        authenticate_checkpoint_artifact(artifact_bytes, policy, expected_policy_sha256)?;
+    validate_freshness(
+        policy,
+        verified.created_at_unix_seconds,
+        evaluated_at_unix_seconds,
+    )?;
+    Ok(verified)
+}
+
+/// Authenticates an already-admitted retained checkpoint without max-age.
+///
+/// This is only safe when immediately composed with an independently
+/// authenticated exact cursor that pins `checkpoint_sha256` and the complete
+/// root lineage. It verifies canonical encoding, the independently pinned
+/// policy, domain and identity, the signature threshold, and that issuance
+/// occurred within the policy's effective/expiry window. It does not prove
+/// that the cursor expectation is independent, that authorities are
+/// independent, that the artifact is current, or that storage is highly
+/// available. Never use this function for initial or advancing admission.
+pub fn authenticate_retained_root_checkpoint(
+    artifact_bytes: &[u8],
+    policy: &CheckpointPolicy,
+    expected_policy_sha256: &str,
+) -> Result<VerifiedRootCheckpoint, CheckpointError> {
+    authenticate_checkpoint_artifact(artifact_bytes, policy, expected_policy_sha256)
+}
+
+fn authenticate_checkpoint_artifact(
+    artifact_bytes: &[u8],
+    policy: &CheckpointPolicy,
+    expected_policy_sha256: &str,
+) -> Result<VerifiedRootCheckpoint, CheckpointError> {
+    validate_policy_pin(policy, expected_policy_sha256)?;
+    if artifact_bytes.is_empty() || artifact_bytes.len() > MAX_ARTIFACT_BYTES {
         return Err(CheckpointError::InvalidArtifact);
     }
     let artifact: CheckpointArtifact =
@@ -221,22 +294,13 @@ pub fn verify_root_checkpoint(
         return Err(CheckpointError::InvalidArtifact);
     }
     validate_manifest(&artifact.manifest, policy, expected_policy_sha256)?;
-    validate_freshness(
-        policy,
-        artifact.manifest.created_at_unix_seconds,
-        evaluated_at_unix_seconds,
-    )?;
-    if artifact.manifest.state_root.generation() != expected_generation
-        || artifact.manifest.state_root.state_sha256() != expected_state_sha256
-    {
-        return Err(CheckpointError::ExpectationMismatch);
-    }
     let message = signing_bytes(&artifact.manifest)?;
     verify_signatures(policy, &message, &artifact.signatures)?;
     Ok(VerifiedRootCheckpoint {
         root: artifact.manifest.state_root,
         checkpoint_policy_sha256: expected_policy_sha256.into(),
         checkpoint_sha256: hash(artifact_bytes),
+        semantic_manifest_sha256: artifact.manifest.semantic_manifest_sha256,
         created_at_unix_seconds: artifact.manifest.created_at_unix_seconds,
         authority_ids: artifact
             .signatures
@@ -246,21 +310,51 @@ pub fn verify_root_checkpoint(
     })
 }
 
+/// Verifies a checkpoint against the complete independently retained root.
+///
+/// Unlike generation-and-digest-only admission, this also pins the identity
+/// and predecessor fields of a v2 root. Callers should prefer this entry point
+/// whenever the canonical root is available outside the state-store host.
+pub fn verify_root_checkpoint_exact(
+    artifact_bytes: &[u8],
+    policy: &CheckpointPolicy,
+    expected_policy_sha256: &str,
+    expected_root: &StateRoot,
+    expected_semantic_manifest_sha256: &str,
+    evaluated_at_unix_seconds: u64,
+) -> Result<VerifiedRootCheckpoint, CheckpointError> {
+    let verified = verify_root_checkpoint(
+        artifact_bytes,
+        policy,
+        expected_policy_sha256,
+        expected_root.generation(),
+        expected_root.state_sha256(),
+        expected_semantic_manifest_sha256,
+        evaluated_at_unix_seconds,
+    )?;
+    if verified.root() != expected_root {
+        return Err(CheckpointError::ExpectationMismatch);
+    }
+    Ok(verified)
+}
+
 fn manifest(
     root: &StateRoot,
     policy: &CheckpointPolicy,
     expected_policy_sha256: &str,
+    semantic_manifest_sha256: &str,
     created_at_unix_seconds: u64,
 ) -> Result<CheckpointManifest, CheckpointError> {
     validate_policy_pin(policy, expected_policy_sha256)?;
     validate_issue_time(policy, created_at_unix_seconds)?;
-    if root.state_identity() != policy.state_identity {
+    if root.state_identity() != policy.state_identity || !valid_sha256(semantic_manifest_sha256) {
         return Err(CheckpointError::ExpectationMismatch);
     }
     let manifest = CheckpointManifest {
         schema: MANIFEST_SCHEMA.into(),
         checkpoint_policy_sha256: expected_policy_sha256.into(),
         checkpoint_domain: policy.checkpoint_domain.clone(),
+        semantic_manifest_sha256: semantic_manifest_sha256.into(),
         state_root: root.clone(),
         created_at_unix_seconds,
     };
@@ -276,6 +370,7 @@ fn validate_manifest(
     if manifest.schema != MANIFEST_SCHEMA
         || manifest.checkpoint_policy_sha256 != expected_policy_sha256
         || manifest.checkpoint_domain != policy.checkpoint_domain
+        || !valid_sha256(&manifest.semantic_manifest_sha256)
         || manifest.state_root.state_identity() != policy.state_identity
         || !valid_sha256(manifest.state_root.state_sha256())
     {
@@ -489,11 +584,36 @@ mod tests {
         root
     }
 
+    fn successor_root(initial_state: &[u8], next_state: &[u8]) -> StateRoot {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let sequence = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "bloch-root-checkpoint-successor-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
+        let initial =
+            write_state(&path, "data:tenant-a:lifecycle", 0, initial_state, None).unwrap();
+        let successor = write_state(
+            &path,
+            "data:tenant-a:lifecycle",
+            1,
+            next_state,
+            Some(&initial),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+        successor
+    }
+
     fn signed_artifact() -> (Vec<u8>, CheckpointPolicy, String, StateRoot) {
         let root = root();
         let (policy, keys) = policy();
         let pin = checkpoint_policy_sha256(&policy).unwrap();
-        let message = checkpoint_signature_message(&root, &policy, &pin, 200).unwrap();
+        let message =
+            checkpoint_signature_message(&root, &policy, &pin, &semantic_digest(), 200).unwrap();
         let signatures: Vec<_> = keys[..2]
             .iter()
             .enumerate()
@@ -502,8 +622,14 @@ mod tests {
                 signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
             })
             .collect();
-        let artifact = create_root_checkpoint(&root, &policy, &pin, 200, &signatures).unwrap();
+        let artifact =
+            create_root_checkpoint(&root, &policy, &pin, &semantic_digest(), 200, &signatures)
+                .unwrap();
         (artifact, policy, pin, root)
+    }
+
+    fn semantic_digest() -> String {
+        hash(b"independently-reviewed-semantic-manifest")
     }
 
     #[test]
@@ -515,13 +641,26 @@ mod tests {
             &pin,
             root.generation(),
             root.state_sha256(),
+            &semantic_digest(),
             250,
         )
         .unwrap();
         assert_eq!(verified.root(), &root);
         assert_eq!(verified.authority_ids(), &["authority-1", "authority-2"]);
+        assert_eq!(verified.semantic_manifest_sha256(), semantic_digest());
         assert!(!verified.authority_independence_proven());
         assert!(!verified.high_availability_proven());
+        assert!(matches!(
+            verify_root_checkpoint_exact(
+                &artifact,
+                &policy,
+                &pin,
+                &root,
+                &hash(b"wrong-semantic-manifest"),
+                250,
+            ),
+            Err(CheckpointError::ExpectationMismatch)
+        ));
     }
 
     #[test]
@@ -529,13 +668,14 @@ mod tests {
         let root = root();
         let (policy, keys) = policy();
         let pin = checkpoint_policy_sha256(&policy).unwrap();
-        let message = checkpoint_signature_message(&root, &policy, &pin, 200).unwrap();
+        let message =
+            checkpoint_signature_message(&root, &policy, &pin, &semantic_digest(), 200).unwrap();
         let one = [DetachedCheckpointSignature {
             authority_id: "authority-1".into(),
             signature: format!("0x{}", hex::encode(keys[0].sign(&message).to_bytes())),
         }];
         assert!(matches!(
-            create_root_checkpoint(&root, &policy, &pin, 200, &one),
+            create_root_checkpoint(&root, &policy, &pin, &semantic_digest(), 200, &one),
             Err(CheckpointError::ThresholdNotMet)
         ));
         let wrong = [
@@ -546,7 +686,7 @@ mod tests {
             },
         ];
         assert!(matches!(
-            create_root_checkpoint(&root, &policy, &pin, 200, &wrong),
+            create_root_checkpoint(&root, &policy, &pin, &semantic_digest(), 200, &wrong),
             Err(CheckpointError::InvalidSignature)
         ));
     }
@@ -555,19 +695,154 @@ mod tests {
     fn rollback_expiry_and_noncanonical_inputs_fail_closed() {
         let (artifact, policy, pin, root) = signed_artifact();
         assert!(matches!(
-            verify_root_checkpoint(&artifact, &policy, &pin, 1, root.state_sha256(), 250),
+            verify_root_checkpoint(
+                &artifact,
+                &policy,
+                &pin,
+                1,
+                root.state_sha256(),
+                &semantic_digest(),
+                250
+            ),
             Err(CheckpointError::ExpectationMismatch)
         ));
         assert!(matches!(
-            verify_root_checkpoint(&artifact, &policy, &pin, 0, root.state_sha256(), 301),
+            verify_root_checkpoint(
+                &artifact,
+                &policy,
+                &pin,
+                0,
+                root.state_sha256(),
+                &semantic_digest(),
+                301
+            ),
             Err(CheckpointError::OutsideValidityWindow)
         ));
         let mut noncanonical = artifact;
         noncanonical.push(b'\n');
         assert!(matches!(
-            verify_root_checkpoint(&noncanonical, &policy, &pin, 0, root.state_sha256(), 250),
+            verify_root_checkpoint(
+                &noncanonical,
+                &policy,
+                &pin,
+                0,
+                root.state_sha256(),
+                &semantic_digest(),
+                250
+            ),
             Err(CheckpointError::InvalidArtifact)
         ));
+    }
+
+    #[test]
+    fn retained_authentication_allows_exact_artifact_after_max_age() {
+        let (artifact, policy, pin, root) = signed_artifact();
+        assert!(matches!(
+            authenticate_root_checkpoint(&artifact, &policy, &pin, 301),
+            Err(CheckpointError::OutsideValidityWindow)
+        ));
+
+        let retained = authenticate_retained_root_checkpoint(&artifact, &policy, &pin).unwrap();
+        assert_eq!(retained.root(), &root);
+        assert_eq!(retained.checkpoint_sha256(), hash(&artifact));
+        assert_eq!(retained.semantic_manifest_sha256(), semantic_digest());
+        assert!(!retained.authority_independence_proven());
+        assert!(!retained.high_availability_proven());
+    }
+
+    #[test]
+    fn retained_authentication_rejects_invalid_issuance_and_signature() {
+        let root = root();
+        let (policy, keys) = policy();
+        let pin = checkpoint_policy_sha256(&policy).unwrap();
+        let manifest = CheckpointManifest {
+            schema: MANIFEST_SCHEMA.into(),
+            checkpoint_policy_sha256: pin.clone(),
+            checkpoint_domain: policy.checkpoint_domain.clone(),
+            semantic_manifest_sha256: semantic_digest(),
+            state_root: root,
+            created_at_unix_seconds: policy.effective_at_unix_seconds - 1,
+        };
+        let message = signing_bytes(&manifest).unwrap();
+        let signatures = keys[..2]
+            .iter()
+            .enumerate()
+            .map(|(index, key)| DetachedCheckpointSignature {
+                authority_id: format!("authority-{}", index + 1),
+                signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+            })
+            .collect();
+        let artifact = serde_json::to_vec(&CheckpointArtifact {
+            schema: ARTIFACT_SCHEMA.into(),
+            manifest,
+            signatures,
+        })
+        .unwrap();
+        assert!(matches!(
+            authenticate_retained_root_checkpoint(&artifact, &policy, &pin),
+            Err(CheckpointError::OutsideValidityWindow)
+        ));
+
+        let (valid, policy, pin, _) = signed_artifact();
+        let mut invalid: CheckpointArtifact = serde_json::from_slice(&valid).unwrap();
+        invalid.signatures[0].signature = format!("0x{}", "00".repeat(64));
+        let invalid = serde_json::to_vec(&invalid).unwrap();
+        assert!(matches!(
+            authenticate_retained_root_checkpoint(&invalid, &policy, &pin),
+            Err(CheckpointError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn exact_verification_pins_the_complete_root() {
+        let root = successor_root(b"initial-a", b"same-next-state");
+        let different = successor_root(b"initial-b", b"same-next-state");
+        assert_eq!(root.generation(), different.generation());
+        assert_eq!(root.state_sha256(), different.state_sha256());
+        assert_ne!(
+            root.previous_root_sha256(),
+            different.previous_root_sha256()
+        );
+        let (policy, keys) = policy();
+        let pin = checkpoint_policy_sha256(&policy).unwrap();
+        let message =
+            checkpoint_signature_message(&root, &policy, &pin, &semantic_digest(), 200).unwrap();
+        let signatures: Vec<_> = keys[..2]
+            .iter()
+            .enumerate()
+            .map(|(index, key)| DetachedCheckpointSignature {
+                authority_id: format!("authority-{}", index + 1),
+                signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+            })
+            .collect();
+        let artifact =
+            create_root_checkpoint(&root, &policy, &pin, &semantic_digest(), 200, &signatures)
+                .unwrap();
+        // The legacy generation-and-state-digest API deliberately cannot
+        // distinguish these roots; exact verification also pins lineage.
+        verify_root_checkpoint(
+            &artifact,
+            &policy,
+            &pin,
+            different.generation(),
+            different.state_sha256(),
+            &semantic_digest(),
+            250,
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_root_checkpoint_exact(
+                &artifact,
+                &policy,
+                &pin,
+                &different,
+                &semantic_digest(),
+                250
+            ),
+            Err(CheckpointError::ExpectationMismatch)
+        ));
+        verify_root_checkpoint_exact(&artifact, &policy, &pin, &root, &semantic_digest(), 250)
+            .unwrap();
     }
 
     #[test]

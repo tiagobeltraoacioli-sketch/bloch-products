@@ -52,10 +52,11 @@ will follow working implementations and retained evidence.
    machine, but no external adjustment is executed by the software. Both the
    Data lifecycle and Pay adjustment states now have bounded canonical recovery
    against independent anti-rollback roots. A common Unix-only local store adds
-   crash-safe CAS persistence for their exact bytes, and threshold Ed25519
-   checkpoints authenticate roots without taking private keys. Integration with
-   an external monotonic root-retention service, encryption and multi-host HA
-   remain open.
+   crash-safe two-phase CAS persistence for their exact bytes, threshold
+   Ed25519 checkpoints authenticate roots and semantic-manifest digests without
+   taking private keys, and a local cursor enforces exact lineage relative to
+   an independently supplied current cursor. Integration with a real external
+   monotonic cursor service, encryption and multi-host HA remain open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 
