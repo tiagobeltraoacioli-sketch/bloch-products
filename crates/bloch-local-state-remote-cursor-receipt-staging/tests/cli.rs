@@ -12,6 +12,7 @@ fn help_identifies_ceremony_import_as_non_production() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("export-signing-request"));
+    assert!(stdout.contains("assemble-receipt"));
     assert!(stdout.contains("ceremony-import-receipt"));
     assert!(stdout.contains("acknowledge-operator-time-is-not-production"));
     assert!(output.stderr.is_empty());

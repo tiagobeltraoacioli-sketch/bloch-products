@@ -2,8 +2,8 @@
 mod unix_cli {
     use bloch_local_state_remote_cursor::parse_remote_cursor_policy;
     use bloch_local_state_remote_cursor_receipt_staging::{
-        ceremony_import_receipt_with_operator_time, export_receipt_signing_request,
-        inspect_receipt_staging,
+        assemble_receipt_from_signature_bundle, ceremony_import_receipt_with_operator_time,
+        export_receipt_signing_request, inspect_receipt_staging,
     };
     use std::collections::BTreeMap;
     use std::ffi::CString;
@@ -13,7 +13,7 @@ mod unix_cli {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
-    const USAGE: &str = "usage:\n  bloch-receipt-staging inspect --store PATH\n  bloch-receipt-staging export-signing-request --store PATH --out FILE\n  bloch-receipt-staging ceremony-import-receipt --store PATH --policy FILE --policy-sha256 0x... --receipt FILE --evaluated-at-unix-seconds N --acknowledge-operator-time-is-not-production\n";
+    const USAGE: &str = "usage:\n  bloch-receipt-staging inspect --store PATH\n  bloch-receipt-staging export-signing-request --store PATH --out FILE\n  bloch-receipt-staging assemble-receipt --store PATH --policy FILE --policy-sha256 0x... --signature-bundle FILE --out FILE\n  bloch-receipt-staging ceremony-import-receipt --store PATH --policy FILE --policy-sha256 0x... --receipt FILE --evaluated-at-unix-seconds N --acknowledge-operator-time-is-not-production\n";
 
     pub fn run() -> Result<(), String> {
         let mut args = std::env::args().skip(1);
@@ -44,6 +44,36 @@ mod unix_cli {
                     .map_err(|e| e.to_string())?;
                 create_once(&required_path(&options, "out")?, &bytes)?;
                 eprintln!("signing request exported to owner-only create-once file");
+            }
+            "assemble-receipt" => {
+                reject_unknown(
+                    &options,
+                    &[
+                        "store",
+                        "policy",
+                        "policy-sha256",
+                        "signature-bundle",
+                        "out",
+                    ],
+                )?;
+                let pin = required(&options, "policy-sha256")?;
+                let policy_bytes =
+                    read_secure_bounded(&required_path(&options, "policy")?, 64 * 1024)?;
+                let policy =
+                    parse_remote_cursor_policy(&policy_bytes, pin).map_err(|e| e.to_string())?;
+                let bundle =
+                    read_secure_bounded(&required_path(&options, "signature-bundle")?, 128 * 1024)?;
+                let receipt = assemble_receipt_from_signature_bundle(
+                    &required_path(&options, "store")?,
+                    &policy,
+                    pin,
+                    &bundle,
+                )
+                .map_err(|e| e.to_string())?;
+                create_once(&required_path(&options, "out")?, &receipt)?;
+                eprintln!(
+                    "receipt assembled and verified into owner-only create-once file; it has not been admitted for production"
+                );
             }
             "ceremony-import-receipt" => {
                 reject_unknown(

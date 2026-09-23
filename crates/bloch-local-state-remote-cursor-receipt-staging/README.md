@@ -43,6 +43,13 @@ bloch-receipt-staging inspect --store /secure/receipt-operation
 bloch-receipt-staging export-signing-request \
   --store /secure/receipt-operation \
   --out /secure/transfer/receipt-signing-request.json
+
+bloch-receipt-staging assemble-receipt \
+  --store /secure/receipt-operation \
+  --policy /secure/pins/remote-cursor-policy.json \
+  --policy-sha256 0xREVIEWED_SHA256 \
+  --signature-bundle /secure/transfer/receipt-signature-bundle.json \
+  --out /secure/transfer/signed-receipt.json
 ```
 
 The export is canonical JSON and is bound to the staged request, decision,
@@ -50,6 +57,21 @@ decision time, policy pin/domain, and state identity. Existing output files,
 symlinks, unsafe staging stores, and non-owner-only input files fail closed.
 The output directory itself must be a real, operator-owned `0700` directory;
 the CLI validates it before creation and again after file and directory fsync.
+
+The signature bundle uses schema
+`bloch.products.remote-cursor-receipt-signature-bundle.v1` and repeats the
+state identity, policy pin, signature domain, request digest, and signing
+message digest from the signing request. Its signatures must be strictly
+ordered by authority ID. Assembly rejects non-canonical JSON, duplicate or
+unknown authority IDs, an insufficient threshold, invalid signatures, and any
+audience or message substitution before writing a canonical receipt. The
+receipt decision time always comes from immutable staging; assembly accepts no
+wall-clock argument and performs no network access.
+
+`assemble-receipt` only creates a verified ceremony artifact. It deliberately
+does not import the receipt into staging and is not a production admission
+gate. Production import remains dependent on `ControlPlaneDecision` and
+`VerifiedTrustedTime` through the preferred in-process APIs.
 
 The CLI intentionally cannot reconstruct the opaque `ControlPlaneDecision` or
 `VerifiedTrustedTime` required by the preferred production API. Consequently,

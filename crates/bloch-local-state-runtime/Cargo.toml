@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bloch-authenticated-transport-evidence = { path = "../bloch-authenticated-transport-evidence" }
+bloch-authenticated-transport-session = { path = "../bloch-authenticated-transport-session" }
 bloch-local-state-admission = { path = "../bloch-local-state-admission" }
 bloch-local-state-coordination = { path = "../bloch-local-state-coordination" }
 bloch-local-state-remote-cursor = { path = "../bloch-local-state-remote-cursor" }

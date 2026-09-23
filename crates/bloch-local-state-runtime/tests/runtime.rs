@@ -1,5 +1,14 @@
 #![cfg(unix)]
 
+use bloch_authenticated_transport_evidence::{
+    AuthenticatedTransportPolicy, TRANSPORT_POLICY_SCHEMA, TransportAuthority,
+    TransportEvidenceSignature, TransportExchangeParameters, TransportPurpose,
+    authenticated_transport_policy_sha256, create_authenticated_transport_evidence_for_exchange,
+    transport_evidence_signature_message_for_exchange,
+};
+use bloch_authenticated_transport_session::{
+    AuthenticatedTransportRequest, MonotonicDeadlineRead as TransportDeadlineRead,
+};
 use bloch_data_governance::{
     LIFECYCLE_POLICY_SCHEMA, LIFECYCLE_STATE_SCHEMA, LifecycleActor, LifecycleActorRole,
     LifecyclePhase, LifecyclePolicy, RetentionDisposition, canonical_lifecycle_policy_bytes,
@@ -175,6 +184,138 @@ impl MonotonicDeadlineRead for TokenReader {
         buffer[..read].copy_from_slice(&self.bytes[self.offset..self.offset + read]);
         self.offset += read;
         Ok(read)
+    }
+}
+
+impl TransportDeadlineRead for TokenReader {
+    type Error = std::io::Error;
+
+    fn read_with_deadline(
+        &mut self,
+        buffer: &mut [u8],
+        _deadline: Instant,
+    ) -> Result<usize, Self::Error> {
+        let available = self.bytes.len().saturating_sub(self.offset);
+        let read = available.min(buffer.len());
+        buffer[..read].copy_from_slice(&self.bytes[self.offset..self.offset + read]);
+        self.offset += read;
+        Ok(read)
+    }
+}
+
+struct TransportFixture {
+    policy: AuthenticatedTransportPolicy,
+    pin: String,
+    keys: [SigningKey; 2],
+}
+
+impl TransportFixture {
+    fn new(
+        purpose: TransportPurpose,
+        identity: &str,
+        time_pin: &str,
+        remote_pin: &str,
+        at: u64,
+    ) -> Self {
+        let key_byte = match purpose {
+            TransportPurpose::ExternalTimeAnchor => 123,
+            TransportPurpose::RemoteCursor => 124,
+            _ => unreachable!(),
+        };
+        let keys = [
+            SigningKey::from_bytes(&[key_byte; 32]),
+            SigningKey::from_bytes(&[key_byte + 1; 32]),
+        ];
+        let policy = AuthenticatedTransportPolicy {
+            schema: TRANSPORT_POLICY_SCHEMA.into(),
+            policy_id: format!("runtime-{purpose:?}"),
+            signature_domain: "bloch-products-runtime-transport".into(),
+            service_id: format!("runtime-{purpose:?}"),
+            purpose,
+            state_identity: identity.into(),
+            trusted_time_policy_sha256: time_pin.into(),
+            remote_cursor_policy_sha256: remote_pin.into(),
+            endpoint_dns_name: "runtime.internal.example".into(),
+            endpoint_port: 443,
+            tls_version: "TLSv1.3".into(),
+            alpn: "h2".into(),
+            allowed_cipher_suites: vec!["TLS_AES_128_GCM_SHA256".into()],
+            server_spki_sha256: vec![
+                "0x5555555555555555555555555555555555555555555555555555555555555555".into(),
+            ],
+            client_spki_sha256:
+                "0x6666666666666666666666666666666666666666666666666666666666666666".into(),
+            threshold: 2,
+            effective_at_unix_seconds: at - 60,
+            expires_at_unix_seconds: at + 60,
+            max_evidence_age_seconds: 20,
+            max_round_trip_millis: 1_000,
+            max_response_bytes: 256 * 1024,
+            authorities: keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| TransportAuthority {
+                    authority_id: format!("transport-{}", index + 1),
+                    ed25519_public_key: format!(
+                        "0x{}",
+                        hex::encode(key.verifying_key().as_bytes())
+                    ),
+                })
+                .collect(),
+        };
+        let pin = authenticated_transport_policy_sha256(&policy).unwrap();
+        Self { policy, pin, keys }
+    }
+
+    fn collect(
+        &self,
+        request: &AuthenticatedTransportRequest<'_>,
+        response: &[u8],
+        signed_response: &[u8],
+        at: u64,
+    ) -> Result<
+        bloch_authenticated_transport_session::AuthenticatedTransportInput,
+        bloch_authenticated_transport_session::TransportCallbackError<std::io::Error>,
+    > {
+        let exchange = TransportExchangeParameters {
+            request_nonce: request.request_nonce(),
+            request_bytes: request.request_bytes(),
+            response_bytes: signed_response,
+            round_trip_millis: 1,
+            observed_at_unix_seconds: at,
+            cipher_suite: "TLS_AES_128_GCM_SHA256",
+            server_spki_sha256: "0x5555555555555555555555555555555555555555555555555555555555555555",
+        };
+        let message =
+            transport_evidence_signature_message_for_exchange(&self.policy, &self.pin, exchange)
+                .unwrap();
+        let signatures = self
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| TransportEvidenceSignature {
+                authority_id: format!("transport-{}", index + 1),
+                signature: format!("0x{}", hex::encode(key.sign(&message).to_bytes())),
+            })
+            .collect::<Vec<_>>();
+        let evidence = create_authenticated_transport_evidence_for_exchange(
+            &self.policy,
+            &self.pin,
+            exchange,
+            &signatures,
+        )
+        .unwrap();
+        let mut response = TokenReader {
+            bytes: response.to_vec(),
+            offset: 0,
+        };
+        let mut evidence = TokenReader {
+            bytes: evidence,
+            offset: 0,
+        };
+        request
+            .collect_exchange(&mut response, &mut evidence)
+            .map_err(bloch_authenticated_transport_session::TransportCallbackError::Ingress)
     }
 }
 
@@ -713,6 +854,236 @@ fn external_anchor_is_verified_before_local_advance_and_cursor_fetch() {
 }
 
 #[test]
+fn authenticated_transport_gates_anchor_and_cursor_before_protocol_use() {
+    let fixture = pay_fixture();
+    let boundary_store = Temp::new("authenticated-transport-boundary");
+    let (time_policy, time_pin, time_keys) =
+        trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+    let at = now();
+    let initial = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: &time_pin,
+        state_identity: &fixture.identity,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+    };
+    provision_trusted_time_boundary_store(&boundary_store.0, audience, &initial).unwrap();
+    let time_policy_bytes = trusted_time_policy_bytes(&time_policy).unwrap();
+    let anchor = AnchorFixture::new(
+        &fixture.identity,
+        &time_policy,
+        &time_pin,
+        &time_keys,
+        &fixture.remote_pin,
+        at,
+    );
+    let anchor_boundary = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let anchor_transport = TransportFixture::new(
+        TransportPurpose::ExternalTimeAnchor,
+        &fixture.identity,
+        &time_pin,
+        &fixture.remote_pin,
+        at,
+    );
+    let cursor_transport = TransportFixture::new(
+        TransportPurpose::RemoteCursor,
+        &fixture.identity,
+        &time_pin,
+        &fixture.remote_pin,
+        at,
+    );
+    let stage = Cell::new(0);
+
+    let admitted = start_pay_with_authenticated_transport(
+        PayStartupMaterials {
+            remote: fixture.remote(Duration::from_secs(1)),
+            local: fixture.local(),
+        },
+        TrustedTimeStartupMaterials {
+            policy_bytes: &time_policy_bytes,
+            expected_policy_sha256: &time_pin,
+            boundary_store: &boundary_store.0,
+            timeout: Duration::from_secs(1),
+        },
+        ExternalAnchorStartupMaterials {
+            policy_bytes: &anchor.policy_bytes,
+            expected_policy_sha256: &anchor.pin,
+            timeout: Duration::from_secs(1),
+        },
+        AnchoredAuthenticatedTransportStartupMaterials {
+            external_anchor: AuthenticatedTransportStartupMaterials {
+                policy: &anchor_transport.policy,
+                expected_policy_sha256: &anchor_transport.pin,
+                timeout: Duration::from_secs(1),
+            },
+            remote_cursor: AuthenticatedTransportStartupMaterials {
+                policy: &cursor_transport.policy,
+                expected_policy_sha256: &cursor_transport.pin,
+                timeout: Duration::from_secs(1),
+            },
+        },
+        |request| {
+            Ok::<_, std::io::Error>(TokenReader {
+                bytes: trusted_time_token(
+                    &time_policy,
+                    &time_pin,
+                    &time_keys,
+                    request.request_nonce(),
+                    at,
+                ),
+                offset: 0,
+            })
+        },
+        |request| {
+            assert_eq!(stage.get(), 0);
+            assert_eq!(
+                load_trusted_time_boundary(&boundary_store.0, audience)
+                    .unwrap()
+                    .not_before_unix_seconds(),
+                at - 1
+            );
+            let nonce = authenticated_request_first_field(request.request_bytes());
+            let response = anchor.response(nonce, &anchor_boundary, at);
+            let payload = encode_authenticated_external_anchor_payload(
+                &response.document_bytes,
+                &response.authenticated_expectation_bytes,
+            )
+            .unwrap();
+            stage.set(1);
+            anchor_transport.collect(&request, &payload, &payload, at)
+        },
+        |request| {
+            assert_eq!(stage.get(), 1);
+            assert_eq!(
+                load_trusted_time_boundary(&boundary_store.0, audience)
+                    .unwrap()
+                    .not_before_unix_seconds(),
+                at + 30
+            );
+            let nonce = authenticated_request_first_field(request.request_bytes());
+            let response = fixture.response_at(nonce, at);
+            stage.set(2);
+            cursor_transport.collect(&request, &response, &response, at)
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.state().adjustment_id(), "adjustment-1");
+    assert_eq!(stage.get(), 2);
+}
+
+#[test]
+fn authenticated_anchor_response_substitution_fails_before_boundary_mutation() {
+    let fixture = pay_fixture();
+    let boundary_store = Temp::new("authenticated-substitution-boundary");
+    let (time_policy, time_pin, time_keys) =
+        trusted_time_policy(&fixture.identity, &fixture.remote_pin);
+    let at = now();
+    let initial = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let audience = TrustedTimeBoundaryAudience {
+        trusted_time_policy_sha256: &time_pin,
+        state_identity: &fixture.identity,
+        remote_cursor_policy_sha256: &fixture.remote_pin,
+    };
+    provision_trusted_time_boundary_store(&boundary_store.0, audience, &initial).unwrap();
+    let time_policy_bytes = trusted_time_policy_bytes(&time_policy).unwrap();
+    let anchor = AnchorFixture::new(
+        &fixture.identity,
+        &time_policy,
+        &time_pin,
+        &time_keys,
+        &fixture.remote_pin,
+        at,
+    );
+    let anchor_boundary = boundary_at(&time_policy, &time_pin, &time_keys, at - 1);
+    let anchor_transport = TransportFixture::new(
+        TransportPurpose::ExternalTimeAnchor,
+        &fixture.identity,
+        &time_pin,
+        &fixture.remote_pin,
+        at,
+    );
+    let cursor_transport = TransportFixture::new(
+        TransportPurpose::RemoteCursor,
+        &fixture.identity,
+        &time_pin,
+        &fixture.remote_pin,
+        at,
+    );
+    let cursor_called = Cell::new(false);
+
+    let result = start_pay_with_authenticated_transport(
+        PayStartupMaterials {
+            remote: fixture.remote(Duration::from_secs(1)),
+            local: fixture.local(),
+        },
+        TrustedTimeStartupMaterials {
+            policy_bytes: &time_policy_bytes,
+            expected_policy_sha256: &time_pin,
+            boundary_store: &boundary_store.0,
+            timeout: Duration::from_secs(1),
+        },
+        ExternalAnchorStartupMaterials {
+            policy_bytes: &anchor.policy_bytes,
+            expected_policy_sha256: &anchor.pin,
+            timeout: Duration::from_secs(1),
+        },
+        AnchoredAuthenticatedTransportStartupMaterials {
+            external_anchor: AuthenticatedTransportStartupMaterials {
+                policy: &anchor_transport.policy,
+                expected_policy_sha256: &anchor_transport.pin,
+                timeout: Duration::from_secs(1),
+            },
+            remote_cursor: AuthenticatedTransportStartupMaterials {
+                policy: &cursor_transport.policy,
+                expected_policy_sha256: &cursor_transport.pin,
+                timeout: Duration::from_secs(1),
+            },
+        },
+        |request| {
+            Ok::<_, std::io::Error>(TokenReader {
+                bytes: trusted_time_token(
+                    &time_policy,
+                    &time_pin,
+                    &time_keys,
+                    request.request_nonce(),
+                    at,
+                ),
+                offset: 0,
+            })
+        },
+        |request| {
+            let nonce = authenticated_request_first_field(request.request_bytes());
+            let response = anchor.response(nonce, &anchor_boundary, at);
+            let signed = encode_authenticated_external_anchor_payload(
+                &response.document_bytes,
+                &response.authenticated_expectation_bytes,
+            )
+            .unwrap();
+            let mut substituted = signed.clone();
+            *substituted.last_mut().unwrap() ^= 1;
+            anchor_transport.collect(&request, &substituted, &signed, at)
+        },
+        |_request| -> Result<
+            bloch_authenticated_transport_session::AuthenticatedTransportInput,
+            bloch_authenticated_transport_session::TransportCallbackError<std::io::Error>,
+        > {
+            cursor_called.set(true);
+            unreachable!()
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(AnchoredFreshStartupRuntimeError::ExternalAnchorTransport(_))
+    ));
+    assert!(!cursor_called.get());
+    assert_eq!(
+        load_trusted_time_boundary(&boundary_store.0, audience)
+            .unwrap()
+            .not_before_unix_seconds(),
+        at - 1
+    );
+}
+
+#[test]
 fn external_anchor_rollback_does_not_advance_local_boundary_or_fetch_cursor() {
     let fixture = pay_fixture();
     let boundary_store = Temp::new("rollback-anchor-boundary");
@@ -1048,6 +1419,12 @@ fn signatures(
 
 fn digest(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn authenticated_request_first_field(request: &[u8]) -> &str {
+    let marker = request.iter().position(|byte| *byte == 0).unwrap() + 1;
+    let length = u32::from_be_bytes(request[marker..marker + 4].try_into().unwrap()) as usize;
+    std::str::from_utf8(&request[marker + 4..marker + 4 + length]).unwrap()
 }
 
 fn trusted_time_policy(

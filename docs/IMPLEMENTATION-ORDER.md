@@ -65,17 +65,20 @@ will follow working implementations and retained evidence.
    threshold caller authorization for exact CAS requests also exist. A durable
    single-host one-time challenge store now upgrades exact authorizations into
    linear replay-protected CAS capabilities. Crash-safe receipt signing/import
-   staging, an offline owner-only signing-request CLI and an
+   staging, an offline owner-only signing-request/detached-signature CLI and an
    absolute-time-bounded replica comparison verifier also exist. A bounded
    collector now acquires every configured replica with a distinct nonce and
-   returns only a verified quorum; none of these supplies signer custody,
-   consensus or fencing. A canonical
+   returns only a verified quorum. A single-host crash-safe report store accepts
+   only that opaque capability and rejects local rollback/equivocation; none of
+   these supplies signer custody, consensus, snapshot resistance or fencing. A canonical
    external-anchor protocol is now composed into optional Data/Pay startup and
    can authenticate an independently retained monotonic generation and time
    boundary, but does not provide the TPM/WORM/remote counter itself. Canonical
    threshold transport evidence plus a one-shot bounded session can bind exact
-   request/response bytes to a fresh nonce, but a live qualified TLS adapter
-   must still derive the handshake claims. Independent
+   request/response bytes to a fresh nonce. The preferred runtime path now
+   composes those sessions before parsing external-anchor and remote-cursor
+   responses, and an offline CLI can re-audit retained artifacts, but a live
+   qualified TLS adapter must still derive the handshake claims. Independent
    rollback-resistant retention, suspend/resume qualification, replicated
    remote deployment, operational trust roots, encryption and multi-host HA
    remain open.

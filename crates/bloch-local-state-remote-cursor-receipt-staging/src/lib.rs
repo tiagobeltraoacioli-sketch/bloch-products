@@ -22,6 +22,9 @@ use thiserror::Error;
 pub const RECEIPT_STAGING_SCHEMA: &str = "bloch.products.remote-cursor-receipt-staging.v1";
 pub const RECEIPT_SIGNING_REQUEST_SCHEMA: &str =
     "bloch.products.remote-cursor-receipt-signing-request.v1";
+pub const RECEIPT_SIGNATURE_BUNDLE_SCHEMA: &str =
+    "bloch.products.remote-cursor-receipt-signature-bundle.v1";
+pub const MAX_RECEIPT_SIGNATURE_BUNDLE_BYTES: usize = 128 * 1024;
 const MAX_STATE_BYTES: u64 = 256 * 1024;
 #[cfg(unix)]
 const MAX_LOCK_WAIT: Duration = Duration::from_millis(250);
@@ -106,6 +109,23 @@ pub struct ReceiptSigningRequest {
     pub signing_message_hex: String,
 }
 
+/// Canonical detached signatures returned by external authorities/HSMs.
+///
+/// Every audience field is repeated deliberately so a bundle cannot be moved
+/// between staged operations. Signatures must be strictly ordered by authority
+/// ID; parsing never silently normalizes an ambiguous or duplicate bundle.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ReceiptSignatureBundle {
+    pub schema: String,
+    pub state_identity: String,
+    pub remote_cursor_policy_sha256: String,
+    pub signature_domain: String,
+    pub request_sha256: String,
+    pub signing_message_sha256: String,
+    pub signatures: Vec<RemoteCursorSignature>,
+}
+
 impl StagedReceipt {
     pub fn receipt_sha256(&self) -> &str {
         &self.receipt_sha256
@@ -140,6 +160,8 @@ pub enum ReceiptStagingError {
     StoreBusy,
     #[error("receipt staging state is invalid or non-canonical")]
     InvalidState,
+    #[error("receipt signature bundle is invalid or non-canonical")]
+    InvalidSignatureBundle,
     #[error("unsafe receipt staging store: {0}")]
     UnsafeStore(&'static str),
     #[error("receipt staging is unsupported on this platform")]
@@ -148,6 +170,105 @@ pub enum ReceiptStagingError {
     Receipt(#[from] RemoteCursorCasError),
     #[error("receipt staging I/O failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Parses an exact canonical detached-signature bundle.
+pub fn parse_receipt_signature_bundle(
+    bytes: &[u8],
+) -> Result<ReceiptSignatureBundle, ReceiptStagingError> {
+    if bytes.is_empty() || bytes.len() > MAX_RECEIPT_SIGNATURE_BUNDLE_BYTES {
+        return Err(ReceiptStagingError::InvalidSignatureBundle);
+    }
+    let bundle: ReceiptSignatureBundle =
+        serde_json::from_slice(bytes).map_err(|_| ReceiptStagingError::InvalidSignatureBundle)?;
+    let canonical =
+        serde_json::to_vec(&bundle).map_err(|_| ReceiptStagingError::InvalidSignatureBundle)?;
+    if canonical != bytes
+        || bundle.schema != RECEIPT_SIGNATURE_BUNDLE_SCHEMA
+        || !valid_sha256(&bundle.remote_cursor_policy_sha256)
+        || !valid_sha256(&bundle.request_sha256)
+        || !valid_sha256(&bundle.signing_message_sha256)
+        || bundle.signatures.is_empty()
+    {
+        return Err(ReceiptStagingError::InvalidSignatureBundle);
+    }
+    let mut previous: Option<&str> = None;
+    for signature in &bundle.signatures {
+        if signature.authority_id.is_empty()
+            || previous.is_some_and(|found| found >= signature.authority_id.as_str())
+        {
+            return Err(ReceiptStagingError::InvalidSignatureBundle);
+        }
+        previous = Some(&signature.authority_id);
+    }
+    Ok(bundle)
+}
+
+/// Offline-only assembly from immutable staging and detached signatures.
+///
+/// This uses the decision time retained in staging, performs no wall-clock or
+/// network access, verifies the signature threshold against the pinned policy,
+/// and does not publish the receipt into the production staging state.
+#[cfg(unix)]
+pub fn assemble_receipt_from_signature_bundle(
+    store: &Path,
+    policy: &RemoteCursorPolicy,
+    expected_policy_sha256: &str,
+    bundle_bytes: &[u8],
+) -> Result<Vec<u8>, ReceiptStagingError> {
+    let bundle = parse_receipt_signature_bundle(bundle_bytes)?;
+    let directory = open_store(store)?;
+    let _lock = StoreLock::acquire(&directory)?;
+    verify_store_path(store, &directory)?;
+    let state = read_state(&directory)?.ok_or(ReceiptStagingError::StateMissing)?;
+    let expected = make_pending(
+        &state.request_bytes,
+        policy,
+        expected_policy_sha256,
+        &state.decision,
+        state.decided_at_unix_seconds,
+    )?;
+    if !same_operation(&state, &expected)
+        || bundle.state_identity != state.state_identity
+        || bundle.remote_cursor_policy_sha256 != state.remote_cursor_policy_sha256
+        || bundle.signature_domain != state.signature_domain
+        || bundle.request_sha256 != state.request_sha256
+        || bundle.signing_message_sha256 != state.signing_message_sha256
+    {
+        return Err(ReceiptStagingError::Conflict);
+    }
+    let receipt = create_remote_cursor_cas_receipt(
+        &state.request_bytes,
+        policy,
+        expected_policy_sha256,
+        &state.decision,
+        state.decided_at_unix_seconds,
+        &bundle.signatures,
+    )?;
+    // Re-run the complete verifier using the staged decision time only. This
+    // authenticates the request, audience, threshold and detached signatures;
+    // it deliberately does not assert current freshness.
+    let verified = verify_remote_cursor_cas_receipt(
+        &receipt,
+        &state.request_bytes,
+        policy,
+        expected_policy_sha256,
+        state.decided_at_unix_seconds,
+    )?;
+    if !decision_matches(&verified, &state.decision) {
+        return Err(ReceiptStagingError::Conflict);
+    }
+    Ok(receipt)
+}
+
+#[cfg(not(unix))]
+pub fn assemble_receipt_from_signature_bundle(
+    _: &Path,
+    _: &RemoteCursorPolicy,
+    _: &str,
+    _: &[u8],
+) -> Result<Vec<u8>, ReceiptStagingError> {
+    Err(ReceiptStagingError::UnsupportedPlatform)
 }
 
 /// Reads validated staging metadata without exposing the staged payloads.
@@ -1208,6 +1329,26 @@ mod tests {
                 .collect()
         }
 
+        fn signature_bundle(&self, decision: &RemoteCursorCasDecision) -> ReceiptSignatureBundle {
+            let signing_message = remote_cursor_cas_receipt_signature_message(
+                &self.request,
+                &self.policy,
+                &self.pin,
+                decision,
+                210,
+            )
+            .unwrap();
+            ReceiptSignatureBundle {
+                schema: RECEIPT_SIGNATURE_BUNDLE_SCHEMA.into(),
+                state_identity: self.policy.state_identity.clone(),
+                remote_cursor_policy_sha256: self.pin.clone(),
+                signature_domain: self.policy.signature_domain.clone(),
+                request_sha256: hash(&self.request),
+                signing_message_sha256: hash(&signing_message),
+                signatures: self.signatures(decision),
+            }
+        }
+
         fn import<'a>(&'a self, decision: &'a RemoteCursorCasDecision) -> ReceiptImport<'a> {
             ReceiptImport {
                 request_bytes: &self.request,
@@ -1712,5 +1853,109 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn detached_bundle_assembles_verified_receipt_without_importing_it() {
+        let f = Fixture::new();
+        let decision = RemoteCursorCasDecision::Accepted;
+        prepare_remote_cursor_cas_receipt(&f.store, &f.request, &f.policy, &f.pin, &decision, 210)
+            .unwrap();
+        let bundle = serde_json::to_vec(&f.signature_bundle(&decision)).unwrap();
+        let receipt =
+            assemble_receipt_from_signature_bundle(&f.store, &f.policy, &f.pin, &bundle).unwrap();
+        let verified =
+            verify_remote_cursor_cas_receipt(&receipt, &f.request, &f.policy, &f.pin, 210).unwrap();
+        assert!(matches!(
+            verified,
+            VerifiedRemoteCursorCasReceipt::Accepted(_)
+        ));
+        assert_eq!(
+            inspect_receipt_staging(&f.store).unwrap().receipt_sha256,
+            None
+        );
+    }
+
+    #[test]
+    fn detached_bundle_rejects_substitution_and_wrong_authority() {
+        let f = Fixture::new();
+        let decision = RemoteCursorCasDecision::Accepted;
+        prepare_remote_cursor_cas_receipt(&f.store, &f.request, &f.policy, &f.pin, &decision, 210)
+            .unwrap();
+        for mutate in ["request", "message", "state"] {
+            let mut bundle = f.signature_bundle(&decision);
+            match mutate {
+                "request" => bundle.request_sha256 = format!("0x{}", "11".repeat(32)),
+                "message" => bundle.signing_message_sha256 = format!("0x{}", "22".repeat(32)),
+                "state" => bundle.state_identity.push_str("-other"),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                assemble_receipt_from_signature_bundle(
+                    &f.store,
+                    &f.policy,
+                    &f.pin,
+                    &serde_json::to_vec(&bundle).unwrap()
+                ),
+                Err(ReceiptStagingError::Conflict)
+            ));
+        }
+
+        let mut bundle = f.signature_bundle(&decision);
+        bundle.signatures[0].authority_id = "authority-0".into();
+        assert!(
+            assemble_receipt_from_signature_bundle(
+                &f.store,
+                &f.policy,
+                &f.pin,
+                &serde_json::to_vec(&bundle).unwrap()
+            )
+            .is_err()
+        );
+
+        let mut below_threshold = f.signature_bundle(&decision);
+        below_threshold.signatures.pop();
+        assert!(
+            assemble_receipt_from_signature_bundle(
+                &f.store,
+                &f.policy,
+                &f.pin,
+                &serde_json::to_vec(&below_threshold).unwrap()
+            )
+            .is_err()
+        );
+
+        let mut invalid_signature = f.signature_bundle(&decision);
+        invalid_signature.signatures[0].signature = format!("0x{}", "00".repeat(64));
+        assert!(
+            assemble_receipt_from_signature_bundle(
+                &f.store,
+                &f.policy,
+                &f.pin,
+                &serde_json::to_vec(&invalid_signature).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn detached_bundle_rejects_duplicate_and_noncanonical_input() {
+        let f = Fixture::new();
+        let decision = RemoteCursorCasDecision::Accepted;
+        prepare_remote_cursor_cas_receipt(&f.store, &f.request, &f.policy, &f.pin, &decision, 210)
+            .unwrap();
+        let mut duplicate = f.signature_bundle(&decision);
+        duplicate.signatures[1].authority_id = duplicate.signatures[0].authority_id.clone();
+        assert!(matches!(
+            parse_receipt_signature_bundle(&serde_json::to_vec(&duplicate).unwrap()),
+            Err(ReceiptStagingError::InvalidSignatureBundle)
+        ));
+
+        let mut noncanonical = serde_json::to_vec(&f.signature_bundle(&decision)).unwrap();
+        noncanonical.push(b'\n');
+        assert!(matches!(
+            parse_receipt_signature_bundle(&noncanonical),
+            Err(ReceiptStagingError::InvalidSignatureBundle)
+        ));
     }
 }

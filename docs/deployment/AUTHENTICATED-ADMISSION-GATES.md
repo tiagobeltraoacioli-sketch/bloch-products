@@ -14,8 +14,11 @@ Threshold transport-evidence verification, crash-safe receipt staging and an
 absolute-time replica-quorum comparison also exist as offline building blocks.
 A one-shot bounded transport session binds exact bytes to a fresh nonce, and a
 bounded collector performs fresh all-replica acquisition without a partial
-fallback. A live qualified transport adapter, independent rollback-resistant
-root, replicated linearizable remote service, authority signing boundary and
+fallback. Preferred Data/Pay runtime entry points now gate both anchor and
+cursor payloads through those exact-exchange sessions before protocol parsing.
+Detached signer bundles and monotonic single-host quorum-report retention also
+exist. A live qualified transport adapter, independent rollback-resistant root,
+replicated linearizable remote service, operational authority/HSM boundary and
 production systemd composition are not deployed or qualified.
 
 The existing `bloch-products-synthetic-store-check@.service` is
@@ -235,9 +238,9 @@ require a separate authority-approved recovery or re-genesis ceremony.
 
 | Priority | Gate | Current status | Required evidence |
 |---|---|---|---|
-| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Library composition, byte-derived threshold evidence, one-shot bounded session and negative tests exist; live qualified TLS adapter/systemd integration evidence remains |
+| P0 | Admission verifies signed remote observation, nonce and independent policy pin | **Partial** | Runtime gates anchor/cursor parsing through byte-derived threshold sessions and negative tests exist; live qualified TLS adapter/systemd integration evidence remains |
 | P0 | Trusted time cannot be supplied by operator argument | **Partial** | Fresh audience-bound threshold acquisition, single-host monotonic store and runtime-composed external-anchor verification exist; independently operated anti-rollback retention/channel, suspend/resume qualification and host tests remain |
-| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host core, durable one-time challenges, trusted-time authorization, crash-safe receipt staging/offline export and fresh all-replica comparison exist; replicated consensus/fencing service, external signer operation and qualification remain |
+| P0 | Durable linearizable remote CAS and create-once bootstrap | **Partial** | Single-host core, durable challenges, trusted-time authorization, detached-signature receipt assembly, fresh all-replica comparison and monotonic local report retention exist; replicated consensus/fencing service, external signer/HSM operation and qualification remain |
 | P0 | One orchestrated writer/recovery path holds coordination throughout | **Partial** | Library composition and 13 crash/recovery cases exist; process/power fault injection and target-host evidence remain |
 | P0 | Synthetic unit cannot satisfy a production target | **Partial** | Unit is explicitly renamed, has no install relationship and CI rejects production-target dependencies/aliases; target-host composition evidence remains |
 | P1 | Fixed UIDs, paths, quotas and dedicated coordination directory | **Partial** | tmpfiles declarations and non-installable checked Data/Pay unit specifications exist; target-host UID, unit and ownership evidence remains |

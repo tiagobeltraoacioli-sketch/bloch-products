@@ -40,6 +40,29 @@ advance the local boundary, fetch the remote cursor and admit state. Anchor
 transport, verification, deadline, trusted-time, boundary, cursor and admission
 failures have distinct error variants.
 
+`start_data_with_authenticated_transport` and
+`start_pay_with_authenticated_transport` are the preferred evidence-gated
+composition. Before acquiring time or mutating a rollback boundary, they
+validate independently pinned, purpose-specific transport policies for both
+the external anchor and remote cursor against the exact state identity,
+trusted-time policy and remote-cursor policy. The ordered critical section is:
+local coordination lock, fresh trusted time, authenticated anchor exchange and
+anchor verification, durable boundary advance, authenticated remote-cursor
+exchange and cursor verification, then product admission. Response bytes stay
+inside an opaque transport-session result until threshold evidence binds the
+fresh session nonce, exact request bytes, exact response bytes, endpoint TLS
+profile and audience. Request/response substitution and transport-policy
+cross-use therefore fail closed.
+
+The anchor transport response uses
+`encode_authenticated_external_anchor_payload`, a versioned, length-delimited
+body that places both the anchor document and retained expectation under the
+same exact-exchange evidence. The runtime decodes that body only after evidence
+verification. Remote-cursor transport requests similarly bind the inner fresh
+cursor nonce and state identity; only the authenticated body is passed to the
+remote-cursor verifier. A malformed authenticated anchor body is rejected and
+never interpreted as an anchor or retained expectation.
+
 The runtime never writes the external expectation to the local boundary store
 and does not treat local persistence as independent evidence. The callback is
 contractually responsible for authenticating the source of
@@ -47,7 +70,10 @@ contractually responsible for authenticating the source of
 parsed again against independently configured pins. The callback must also
 honor the supplied monotonic deadline. This crate provides no network client,
 TPM/WORM/remote-counter implementation, authenticated channel, independent
-retention, or anchor authority operations.
+retention, or anchor authority operations. The authenticated-transport entry
+points verify evidence but still do not open a socket, perform a TLS handshake,
+derive handshake claims, operate attestors, or establish that configured
+attestors are independent. Those remain adapter and deployment obligations.
 
 The opaque verified remote cursor never leaves this composition. The crate has
 no CLI, filesystem input loader, network client, cache, nonce persistence or

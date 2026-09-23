@@ -1,5 +1,12 @@
 //! In-process remote-fetch plus coordinated product startup admission.
 
+use bloch_authenticated_transport_evidence::{
+    AuthenticatedTransportPolicy, TransportPurpose, authenticated_transport_policy_sha256,
+};
+use bloch_authenticated_transport_session::{
+    AuthenticatedTransportInput, AuthenticatedTransportRequest, AuthenticatedTransportSessionError,
+    TransportCallbackError, execute_authenticated_transport_session,
+};
 use bloch_local_state_admission::{
     AdmissionError, AdmittedAdjustmentState, AdmittedLifecycleState, DataLifecycleAdmission,
     PayAdjustmentAdmission, StartupAdmission, admit_data_lifecycle, admit_pay_adjustment,
@@ -69,6 +76,68 @@ pub struct ExternalAnchorStartupMaterials<'a> {
     pub policy_bytes: &'a [u8],
     pub expected_policy_sha256: &'a str,
     pub timeout: Duration,
+}
+
+/// Independently pinned authenticated-transport policy for one startup
+/// exchange. The policy itself fixes the endpoint, TLS profile, mTLS client,
+/// attestors and Data/Pay audience; the caller cannot override those values in
+/// the transport callback.
+pub struct AuthenticatedTransportStartupMaterials<'a> {
+    pub policy: &'a AuthenticatedTransportPolicy,
+    pub expected_policy_sha256: &'a str,
+    pub timeout: Duration,
+}
+
+/// Authenticated transport profiles for the two external exchanges in an
+/// anchored startup. Distinct purpose-specific policies are mandatory.
+pub struct AnchoredAuthenticatedTransportStartupMaterials<'a> {
+    pub external_anchor: AuthenticatedTransportStartupMaterials<'a>,
+    pub remote_cursor: AuthenticatedTransportStartupMaterials<'a>,
+}
+
+const AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX: &[u8] =
+    b"BLOCH-AUTHENTICATED-EXTERNAL-ANCHOR-PAYLOAD-V1\0";
+
+/// Constructs the exact response body expected from the authenticated anchor
+/// exchange. Both the signed anchor and independently retained expectation are
+/// covered by the transport evidence before either byte string is exposed to
+/// an anchor parser.
+pub fn encode_authenticated_external_anchor_payload(
+    document_bytes: &[u8],
+    expectation_bytes: &[u8],
+) -> Result<Vec<u8>, AuthenticatedTransportPayloadError> {
+    if document_bytes.is_empty()
+        || document_bytes.len() > MAX_EXTERNAL_ANCHOR_DOCUMENT_BYTES
+        || expectation_bytes.is_empty()
+        || expectation_bytes.len() > MAX_EXTERNAL_ANCHOR_EXPECTATION_BYTES
+    {
+        return Err(AuthenticatedTransportPayloadError);
+    }
+    let document_len =
+        u32::try_from(document_bytes.len()).map_err(|_| AuthenticatedTransportPayloadError)?;
+    let mut payload = Vec::with_capacity(
+        AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX.len()
+            + 4
+            + document_bytes.len()
+            + expectation_bytes.len(),
+    );
+    payload.extend_from_slice(AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX);
+    payload.extend_from_slice(&document_len.to_be_bytes());
+    payload.extend_from_slice(document_bytes);
+    payload.extend_from_slice(expectation_bytes);
+    Ok(payload)
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[error("authenticated transport payload is invalid")]
+pub struct AuthenticatedTransportPayloadError;
+
+#[derive(Debug, Error)]
+pub enum AuthenticatedAnchorTransportError<E> {
+    #[error("authenticated external-anchor transport session failed")]
+    Session(#[source] AuthenticatedTransportSessionError<E>),
+    #[error("authenticated external-anchor response payload is invalid")]
+    Payload(#[source] AuthenticatedTransportPayloadError),
 }
 
 /// Borrowed, one-shot challenge passed to the caller's external-anchor
@@ -168,6 +237,8 @@ pub enum AnchoredFreshStartupRuntimeError<TE, AE, CE> {
     ExternalAnchorDeadlineExceeded,
     #[error("external-anchor verification failed")]
     ExternalAnchorVerification(#[source] ExternalAnchorError),
+    #[error("authenticated transport startup configuration is invalid")]
+    AuthenticatedTransportConfiguration,
     #[error("remote cursor fetch session failed")]
     Remote(#[source] FetchSessionError<CE>),
     #[error("local startup admission failed")]
@@ -181,6 +252,7 @@ enum AnchoredFreshStartupOperationError<TE, AE, CE> {
     ExternalAnchorTransport(AE),
     ExternalAnchorDeadlineExceeded,
     ExternalAnchorVerification(ExternalAnchorError),
+    AuthenticatedTransportConfiguration,
     Remote(FetchSessionError<CE>),
     Admission(AdmissionError),
 }
@@ -499,6 +571,166 @@ where
     map_anchored_fresh_coordinated(result)
 }
 
+/// Fully evidence-gated anchored startup for Bloch Pay. The anchor payload and
+/// remote cursor are unavailable to their protocol parsers until a fresh,
+/// exact-exchange transport session has verified them. Policy pins and
+/// purposes are validated before trusted-time acquisition or durable mutation.
+pub fn start_pay_with_authenticated_transport<TE, TR, TF, AE, AF, CE, CF>(
+    materials: PayStartupMaterials<'_>,
+    trusted_time_materials: TrustedTimeStartupMaterials<'_>,
+    external_anchor_materials: ExternalAnchorStartupMaterials<'_>,
+    authenticated_transport: AnchoredAuthenticatedTransportStartupMaterials<'_>,
+    trusted_time_transport: TF,
+    external_anchor_transport: AF,
+    remote_cursor_transport: CF,
+) -> Result<
+    AdmittedAdjustmentState,
+    AnchoredFreshStartupRuntimeError<
+        TE,
+        AuthenticatedAnchorTransportError<AE>,
+        AuthenticatedTransportSessionError<CE>,
+    >,
+>
+where
+    TR: TrustedTimeDeadlineRead<Error = TE>,
+    TF: for<'session> FnOnce(TrustedTimeFetchRequest<'session>) -> Result<TR, TE>,
+    AF: for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    )
+        -> Result<AuthenticatedTransportInput, TransportCallbackError<AE>>,
+    CF: for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    )
+        -> Result<AuthenticatedTransportInput, TransportCallbackError<CE>>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        validate_authenticated_transport_materials(
+            &materials.remote,
+            &trusted_time_materials,
+            &authenticated_transport,
+        )?;
+        let trusted_time = acquire_trusted_time(
+            &materials.remote,
+            &trusted_time_materials,
+            trusted_time_transport,
+        )
+        .map_err(map_authenticated_trusted_time_preparation)?;
+        verify_external_anchor_for_startup(
+            &materials.remote,
+            &trusted_time_materials,
+            &external_anchor_materials,
+            &trusted_time,
+            |request| {
+                fetch_authenticated_anchor(
+                    request,
+                    &authenticated_transport.external_anchor,
+                    &trusted_time,
+                    external_anchor_transport,
+                )
+            },
+        )?;
+        advance_authenticated_boundary(&materials.remote, &trusted_time_materials, &trusted_time)?;
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            &trusted_time,
+            trusted_time_materials.expected_policy_sha256,
+            |request| {
+                fetch_authenticated_remote_cursor(
+                    request,
+                    &authenticated_transport.remote_cursor,
+                    &trusted_time,
+                    remote_cursor_transport,
+                )
+            },
+        )
+        .map_err(AnchoredFreshStartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_pay_adjustment(PayAdjustmentAdmission { startup })
+            .map_err(AnchoredFreshStartupOperationError::Admission)
+    });
+    map_anchored_fresh_coordinated(result)
+}
+
+/// Bloch Data counterpart of [`start_pay_with_authenticated_transport`].
+pub fn start_data_with_authenticated_transport<TE, TR, TF, AE, AF, CE, CF>(
+    materials: DataStartupMaterials<'_>,
+    trusted_time_materials: TrustedTimeStartupMaterials<'_>,
+    external_anchor_materials: ExternalAnchorStartupMaterials<'_>,
+    authenticated_transport: AnchoredAuthenticatedTransportStartupMaterials<'_>,
+    trusted_time_transport: TF,
+    external_anchor_transport: AF,
+    remote_cursor_transport: CF,
+) -> Result<
+    AdmittedLifecycleState,
+    AnchoredFreshStartupRuntimeError<
+        TE,
+        AuthenticatedAnchorTransportError<AE>,
+        AuthenticatedTransportSessionError<CE>,
+    >,
+>
+where
+    TR: TrustedTimeDeadlineRead<Error = TE>,
+    TF: for<'session> FnOnce(TrustedTimeFetchRequest<'session>) -> Result<TR, TE>,
+    AF: for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    )
+        -> Result<AuthenticatedTransportInput, TransportCallbackError<AE>>,
+    CF: for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    )
+        -> Result<AuthenticatedTransportInput, TransportCallbackError<CE>>,
+{
+    let result = with_coordinated_startup_admission(materials.local.coordination_directory, |_| {
+        validate_authenticated_transport_materials(
+            &materials.remote,
+            &trusted_time_materials,
+            &authenticated_transport,
+        )?;
+        let trusted_time = acquire_trusted_time(
+            &materials.remote,
+            &trusted_time_materials,
+            trusted_time_transport,
+        )
+        .map_err(map_authenticated_trusted_time_preparation)?;
+        verify_external_anchor_for_startup(
+            &materials.remote,
+            &trusted_time_materials,
+            &external_anchor_materials,
+            &trusted_time,
+            |request| {
+                fetch_authenticated_anchor(
+                    request,
+                    &authenticated_transport.external_anchor,
+                    &trusted_time,
+                    external_anchor_transport,
+                )
+            },
+        )?;
+        advance_authenticated_boundary(&materials.remote, &trusted_time_materials, &trusted_time)?;
+        let verified_remote = fetch_with_trusted_time(
+            &materials.remote,
+            &trusted_time,
+            trusted_time_materials.expected_policy_sha256,
+            |request| {
+                fetch_authenticated_remote_cursor(
+                    request,
+                    &authenticated_transport.remote_cursor,
+                    &trusted_time,
+                    remote_cursor_transport,
+                )
+            },
+        )
+        .map_err(AnchoredFreshStartupOperationError::Remote)?;
+        let startup = startup(&materials.local, &verified_remote);
+        admit_data_lifecycle(DataLifecycleAdmission {
+            startup,
+            lifecycle_policy_bytes: materials.lifecycle_policy_bytes,
+        })
+        .map_err(AnchoredFreshStartupOperationError::Admission)
+    });
+    map_anchored_fresh_coordinated(result)
+}
+
 fn fetch<E, F>(
     materials: &RemoteFetchMaterials<'_>,
     transport: F,
@@ -513,6 +745,175 @@ where
         materials.timeout,
         transport,
     )
+}
+
+fn validate_authenticated_transport_materials<TE, AE, CE>(
+    remote: &RemoteFetchMaterials<'_>,
+    trusted: &TrustedTimeStartupMaterials<'_>,
+    transports: &AnchoredAuthenticatedTransportStartupMaterials<'_>,
+) -> Result<(), AnchoredFreshStartupOperationError<TE, AE, CE>> {
+    let valid = [
+        (
+            &transports.external_anchor,
+            TransportPurpose::ExternalTimeAnchor,
+        ),
+        (&transports.remote_cursor, TransportPurpose::RemoteCursor),
+    ]
+    .into_iter()
+    .all(|(materials, purpose)| {
+        authenticated_transport_policy_sha256(materials.policy)
+            .is_ok_and(|pin| pin == materials.expected_policy_sha256)
+            && materials.policy.purpose == purpose
+            && materials.policy.state_identity == remote.expected_state_identity
+            && materials.policy.trusted_time_policy_sha256 == trusted.expected_policy_sha256
+            && materials.policy.remote_cursor_policy_sha256 == remote.expected_policy_sha256
+            && !materials.timeout.is_zero()
+            && materials.timeout <= Duration::from_secs(60)
+            && materials.timeout <= Duration::from_millis(materials.policy.max_round_trip_millis)
+            && usize::try_from(materials.policy.max_response_bytes).is_ok_and(|limit| limit > 0)
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(AnchoredFreshStartupOperationError::AuthenticatedTransportConfiguration)
+    }
+}
+
+fn map_authenticated_trusted_time_preparation<TE, AE, CE>(
+    error: TrustedTimePreparationError<TE>,
+) -> AnchoredFreshStartupOperationError<TE, AE, CE> {
+    match error {
+        TrustedTimePreparationError::Boundary(error) => {
+            AnchoredFreshStartupOperationError::TrustedTimeBoundary(error)
+        }
+        TrustedTimePreparationError::Acquisition(error) => {
+            AnchoredFreshStartupOperationError::TrustedTimeAcquisition(error)
+        }
+    }
+}
+
+fn advance_authenticated_boundary<TE, AE, CE>(
+    remote: &RemoteFetchMaterials<'_>,
+    trusted: &TrustedTimeStartupMaterials<'_>,
+    verified: &VerifiedTrustedTime,
+) -> Result<(), AnchoredFreshStartupOperationError<TE, AE, CE>> {
+    advance_boundary(remote, trusted, verified).map_err(|error| match error {
+        BoundaryAdvanceError::Capability(error) => {
+            AnchoredFreshStartupOperationError::TrustedTimeAcquisition(
+                TrustedTimeAcquisitionError::Authentication(error),
+            )
+        }
+        BoundaryAdvanceError::Store(error) => {
+            AnchoredFreshStartupOperationError::TrustedTimeBoundary(error)
+        }
+    })
+}
+
+fn fetch_authenticated_anchor<AE>(
+    request: ExternalAnchorFetchRequest<'_>,
+    transport: &AuthenticatedTransportStartupMaterials<'_>,
+    trusted_time: &VerifiedTrustedTime,
+    callback: impl for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    ) -> Result<
+        AuthenticatedTransportInput,
+        TransportCallbackError<AE>,
+    >,
+) -> Result<ExternalAnchorFetchResponse, AuthenticatedAnchorTransportError<AE>> {
+    let request_bytes = canonical_authenticated_request(
+        b"BLOCH-EXTERNAL-ANCHOR-TRANSPORT-REQUEST-V1\0",
+        &[
+            request.request_nonce(),
+            request.expected_policy_sha256(),
+            request.expected_state_identity(),
+            request.expected_trusted_time_policy_sha256(),
+            request.expected_remote_cursor_policy_sha256(),
+        ],
+    )
+    .map_err(AuthenticatedAnchorTransportError::Payload)?;
+    let verified = execute_authenticated_transport_session(
+        transport.policy,
+        transport.expected_policy_sha256,
+        TransportPurpose::ExternalTimeAnchor,
+        &request_bytes,
+        transport.timeout,
+        trusted_time,
+        callback,
+    )
+    .map_err(AuthenticatedAnchorTransportError::Session)?;
+    decode_authenticated_external_anchor_payload(verified.response_bytes())
+        .map_err(AuthenticatedAnchorTransportError::Payload)
+}
+
+fn fetch_authenticated_remote_cursor<CE>(
+    request: RemoteCursorFetchRequest<'_>,
+    transport: &AuthenticatedTransportStartupMaterials<'_>,
+    trusted_time: &VerifiedTrustedTime,
+    callback: impl for<'session> FnOnce(
+        AuthenticatedTransportRequest<'session>,
+    ) -> Result<
+        AuthenticatedTransportInput,
+        TransportCallbackError<CE>,
+    >,
+) -> Result<Vec<u8>, AuthenticatedTransportSessionError<CE>> {
+    let request_bytes = canonical_authenticated_request(
+        b"BLOCH-REMOTE-CURSOR-TRANSPORT-REQUEST-V1\0",
+        &[request.request_nonce(), request.expected_state_identity()],
+    )
+    .map_err(|_| AuthenticatedTransportSessionError::InvalidConfiguration)?;
+    execute_authenticated_transport_session(
+        transport.policy,
+        transport.expected_policy_sha256,
+        TransportPurpose::RemoteCursor,
+        &request_bytes,
+        transport.timeout,
+        trusted_time,
+        callback,
+    )
+    .map(|response| response.into_response_bytes())
+}
+
+fn canonical_authenticated_request(
+    prefix: &[u8],
+    fields: &[&str],
+) -> Result<Vec<u8>, AuthenticatedTransportPayloadError> {
+    let mut request = Vec::from(prefix);
+    for field in fields {
+        let bytes = field.as_bytes();
+        let length = u32::try_from(bytes.len()).map_err(|_| AuthenticatedTransportPayloadError)?;
+        request.extend_from_slice(&length.to_be_bytes());
+        request.extend_from_slice(bytes);
+    }
+    Ok(request)
+}
+
+fn decode_authenticated_external_anchor_payload(
+    payload: &[u8],
+) -> Result<ExternalAnchorFetchResponse, AuthenticatedTransportPayloadError> {
+    let header = AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX.len() + 4;
+    if payload.len() <= header || !payload.starts_with(AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX) {
+        return Err(AuthenticatedTransportPayloadError);
+    }
+    let length_offset = AUTHENTICATED_ANCHOR_PAYLOAD_PREFIX.len();
+    let document_len = u32::from_be_bytes(
+        payload[length_offset..header]
+            .try_into()
+            .map_err(|_| AuthenticatedTransportPayloadError)?,
+    ) as usize;
+    let document_end = header
+        .checked_add(document_len)
+        .ok_or(AuthenticatedTransportPayloadError)?;
+    if document_len == 0
+        || document_len > MAX_EXTERNAL_ANCHOR_DOCUMENT_BYTES
+        || document_end >= payload.len()
+        || payload.len() - document_end > MAX_EXTERNAL_ANCHOR_EXPECTATION_BYTES
+    {
+        return Err(AuthenticatedTransportPayloadError);
+    }
+    Ok(ExternalAnchorFetchResponse {
+        document_bytes: payload[header..document_end].to_vec(),
+        authenticated_expectation_bytes: payload[document_end..].to_vec(),
+    })
 }
 
 fn acquire_and_advance_trusted_time<TE, TR, TF, CE>(
@@ -737,6 +1138,9 @@ fn map_anchored_fresh_coordinated<T, TE, AE, CE>(
         CoordinatedError::Operation(
             AnchoredFreshStartupOperationError::ExternalAnchorVerification(error),
         ) => AnchoredFreshStartupRuntimeError::ExternalAnchorVerification(error),
+        CoordinatedError::Operation(
+            AnchoredFreshStartupOperationError::AuthenticatedTransportConfiguration,
+        ) => AnchoredFreshStartupRuntimeError::AuthenticatedTransportConfiguration,
         CoordinatedError::Operation(AnchoredFreshStartupOperationError::Remote(error)) => {
             AnchoredFreshStartupRuntimeError::Remote(error)
         }

@@ -134,7 +134,9 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-authenticated-transport-evidence`: canonical threshold-attested
   evidence for one exact TLS 1.3/mTLS exchange, including endpoint, handshake
   pins, nonce and request/response digests. It verifies claims but does not
-  open or inspect a live TLS connection.
+  open or inspect a live TLS connection. Its offline audit CLI re-verifies
+  owner-only artifacts and always reports that they are not production
+  qualification evidence.
 - `bloch-authenticated-transport-session`: one-shot, bounded acquisition with
   an in-memory CSPRNG nonce, exact request/response byte binding, monotonic
   deadline and opaque verified response. The callback still must provide the
@@ -142,7 +144,9 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-local-state-runtime`: in-process Data/Pay startup composition joining
   fresh trusted time and an optional independently retained external anchor to
   the one-shot remote session and coordinated semantic admission, without
-  materializing a raw cursor or nonce file.
+  materializing a raw cursor or nonce file. Preferred entry points now gate
+  both anchor and cursor response bytes through exact-exchange authenticated
+  transport sessions before their protocol parsers can observe them.
 - `bloch-local-state-remote-cursor-control-plane`: Unix reference core for
   explicitly provisioned, durable, idempotent and serialized cursor CAS. It
   requires an exact replay-protected threshold caller-authorization capability, returns
@@ -158,8 +162,9 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-local-state-remote-cursor-receipt-staging`: crash-safe create-once
   signing material and signed-receipt import for exact CAS decisions. Private
   keys and external signer operation remain outside the process. Its offline
-  CLI exports owner-only signing requests; manual-time import is explicitly a
-  non-production ceremony path.
+  CLI exports owner-only signing requests, verifies detached external/HSM
+  signature bundles and assembles create-once receipts; manual-time import is
+  explicitly a non-production ceremony path.
 - `bloch-local-state-remote-cursor-replica-quorum`: offline comparison of
   independently authenticated replica observations, with absolute trusted-time
   freshness and split-brain rejection. It is evidence analysis, not consensus,
@@ -167,6 +172,9 @@ identity, prove finality, activate a network, or authorize asset movement.
 - `bloch-local-state-remote-cursor-quorum-session`: bounded fresh collection
   from every configured replica with a distinct CSPRNG nonce, per-replica and
   global deadlines, exact signer-set binding and no raw/partial fallback.
+- `bloch-local-state-remote-cursor-quorum-report-store`: crash-safe monotonic
+  single-host retention accepting only opaque verified quorum capabilities. It
+  detects local rollback/equivocation but is not consensus or snapshot-proof.
 - `bloch-local-state-transition`: coordinated writer and recovery composition
   across prepared state, external checkpoint/CAS callbacks, freshly observed
   successor, local cursor advancement, promotion and semantic postcheck.
