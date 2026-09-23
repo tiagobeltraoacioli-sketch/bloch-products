@@ -45,7 +45,10 @@ will follow working implementations and retained evidence.
    consensus/ancestry proof, distributed allocation HA, hardened policy-wallet
    operation, bank/Pix integration and credit policy remain open. Authenticated
    cancellation/dispute/refund observations now feed a replay-safe local state
-   machine, but no external adjustment is executed by the software.
+   machine, but no external adjustment is executed by the software. Both the
+   Data lifecycle and Pay adjustment states now have bounded canonical recovery
+   against independent anti-rollback roots; durable protected root storage is
+   still open.
 7. Read-only route risk comparison.
 8. Regulated or value-moving products only after their external gates pass.
 

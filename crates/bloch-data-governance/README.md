@@ -74,6 +74,14 @@ capability methods deliberately remain `false`. Durable storage, anti-rollback,
 multi-writer serialization, key custody and execution by storage systems remain
 deployment responsibilities.
 
+Canonical lifecycle state can be recovered after restart only with a state
+digest, sequence and policy/record/schema roots retained independently from the
+state bytes. Recovery reconstructs the initial state and replays every retained
+transition through the original Ed25519 verification and state-machine rules;
+the resulting canonical bytes must exactly equal the stored bytes. This closes
+safe object rehydration, but does not itself provide filesystem durability,
+external root retention, multi-writer coordination or HA.
+
 The policy's `constructionId` is an allowlist binding, not cryptographic proof.
 The operator must separately qualify and enforce a randomized, hiding
 commitment implementation; a plain deterministic hash of PII or financial data

@@ -50,7 +50,43 @@ fn dispute_refund_lifecycle_is_deterministic_replay_safe_and_non_custodial() {
     assert!(!refunded.settlement_qualified());
     assert!(!refunded.credit_authorized());
     assert!(!refunded.funds_moved());
-    assert_eq!(final_state.canonical_bytes(), final_state.canonical_bytes());
+    let state_bytes = final_state.canonical_bytes();
+    let state_digest = final_state.state_sha256();
+    let restored = restore_adjustment_state(
+        &state_bytes,
+        AdjustmentStateExpectation {
+            adjustment_policy_sha256: &fixture.adjustments_pin,
+            reconciliation_policy_sha256: &fixture.reconciliation_pin,
+            adjustment_id: "adjust-a",
+            payment_observation_id: fixture.payment.observation().observation_id.as_str(),
+            payment_observation_sha256: fixture.payment.canonical_observation_sha256(),
+            payment_amount_minor: fixture.payment.observation().amount_minor,
+            generation: 3,
+            state_sha256: &state_digest,
+        },
+    )
+    .unwrap();
+    assert_eq!(restored.canonical_bytes(), state_bytes);
+    assert_eq!(restored.status(), AdjustmentStatus::RefundObserved);
+
+    let mut tampered = state_bytes;
+    tampered.push(b'\n');
+    assert_eq!(
+        restore_adjustment_state(
+            &tampered,
+            AdjustmentStateExpectation {
+                adjustment_policy_sha256: &fixture.adjustments_pin,
+                reconciliation_policy_sha256: &fixture.reconciliation_pin,
+                adjustment_id: "adjust-a",
+                payment_observation_id: fixture.payment.observation().observation_id.as_str(),
+                payment_observation_sha256: fixture.payment.canonical_observation_sha256(),
+                payment_amount_minor: fixture.payment.observation().amount_minor,
+                generation: 3,
+                state_sha256: &state_digest,
+            },
+        ),
+        Err(AdjustmentError::StateExpectationMismatch)
+    );
 }
 
 #[test]

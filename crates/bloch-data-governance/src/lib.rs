@@ -28,10 +28,11 @@ pub use dataset_schema::{
 pub use lifecycle::{
     AuthorizedLifecycleTransition, LIFECYCLE_POLICY_SCHEMA, LIFECYCLE_STATE_SCHEMA,
     LIFECYCLE_TRANSITION_SCHEMA, LifecycleAction, LifecycleActor, LifecycleActorRole,
-    LifecycleError, LifecyclePhase, LifecyclePolicy, LifecycleState, LifecycleTransitionRequest,
-    apply_authorized_lifecycle_transition, authorize_lifecycle_transition,
-    canonical_lifecycle_policy_bytes, initialize_lifecycle_state, lifecycle_policy_sha256,
-    lifecycle_state_bytes, lifecycle_transition_signing_bytes, parse_lifecycle_policy,
+    LifecycleError, LifecyclePhase, LifecyclePolicy, LifecycleState, LifecycleStateExpectation,
+    LifecycleTransitionRequest, MAX_LIFECYCLE_STATE_BYTES, apply_authorized_lifecycle_transition,
+    authorize_lifecycle_transition, canonical_lifecycle_policy_bytes, initialize_lifecycle_state,
+    lifecycle_policy_sha256, lifecycle_state_bytes, lifecycle_transition_signing_bytes,
+    parse_lifecycle_policy, restore_lifecycle_state,
 };
 pub use record::{
     AuthorizedJsonIngestion, JsonIngestionContext, JsonIngestionError, MAX_JSON_RECORD_BYTES,

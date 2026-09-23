@@ -21,6 +21,7 @@ pub const MAX_LIFECYCLE_POLICY_BYTES: usize = 128 * 1024;
 pub const MAX_LIFECYCLE_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_LIFECYCLE_ACTORS: usize = 256;
 pub const MAX_LIFECYCLE_EVENTS: usize = 4_096;
+pub const MAX_LIFECYCLE_STATE_BYTES: usize = 8 * 1024 * 1024;
 const SIGNATURE_PROTOCOL_DOMAIN: &[u8] = b"BLOCH-DATA-LIFECYCLE-TRANSITION-V1\0";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -107,6 +108,36 @@ struct LifecycleEvent {
     action: LifecycleAction,
     request_sha256: String,
     signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LifecycleStateWire {
+    schema: String,
+    lifecycle_policy_sha256: String,
+    governance_policy_sha256: String,
+    dataset_schema_sha256: String,
+    record_sha256: String,
+    dispose_after_unix_seconds: u64,
+    disposition: RetentionDisposition,
+    sequence: u64,
+    phase: LifecyclePhase,
+    active_legal_hold_id: Option<String>,
+    disposal_order_id: Option<String>,
+    evidence_id: Option<String>,
+    evidence_sha256: Option<String>,
+    events: Vec<LifecycleEvent>,
+}
+
+/// Independently retained roots required to recover a lifecycle state.
+/// `state_sha256` must not be read from the same storage object as the state.
+pub struct LifecycleStateExpectation<'a> {
+    pub lifecycle_policy_sha256: &'a str,
+    pub governance_policy_sha256: &'a str,
+    pub dataset_schema_sha256: &'a str,
+    pub record_sha256: &'a str,
+    pub sequence: u64,
+    pub state_sha256: &'a str,
 }
 
 /// Canonical audit state. Private fields prevent construction of a terminal
@@ -207,6 +238,8 @@ pub enum LifecycleError {
     InvalidSignature,
     #[error("lifecycle transition does not match the current state")]
     StateMismatch,
+    #[error("lifecycle state does not match independently retained expectations")]
+    StateExpectationMismatch,
     #[error("lifecycle transition is denied by retention or legal-hold state")]
     TransitionDenied,
     #[error("cannot encode lifecycle artifact")]
@@ -442,6 +475,101 @@ pub fn apply_authorized_lifecycle_transition(
 
 pub fn lifecycle_state_bytes(state: &LifecycleState) -> Result<Vec<u8>, LifecycleError> {
     serde_json::to_vec(state).map_err(|_| LifecycleError::Encoding)
+}
+
+/// Recovers an opaque state only after canonical decoding, independent
+/// digest/context checks, and replay of every retained Ed25519 transition.
+pub fn restore_lifecycle_state(
+    bytes: &[u8],
+    policy: &LifecyclePolicy,
+    expected: LifecycleStateExpectation<'_>,
+) -> Result<LifecycleState, LifecycleError> {
+    if bytes.is_empty() {
+        return Err(LifecycleError::Empty);
+    }
+    if bytes.len() > MAX_LIFECYCLE_STATE_BYTES {
+        return Err(LifecycleError::TooLarge);
+    }
+    validate_policy_pin(policy, expected.lifecycle_policy_sha256)?;
+    for (value, field) in [
+        (expected.governance_policy_sha256, "governancePolicySha256"),
+        (expected.dataset_schema_sha256, "datasetSchemaSha256"),
+        (expected.record_sha256, "recordSha256"),
+        (expected.state_sha256, "stateSha256"),
+    ] {
+        require_hash(value, field)?;
+    }
+    if hash(bytes) != expected.state_sha256 {
+        return Err(LifecycleError::StateExpectationMismatch);
+    }
+    let wire: LifecycleStateWire = serde_json::from_slice(bytes)
+        .map_err(|error| LifecycleError::InvalidJson(error.to_string()))?;
+    if wire.schema != LIFECYCLE_STATE_SCHEMA
+        || wire.lifecycle_policy_sha256 != expected.lifecycle_policy_sha256
+        || wire.governance_policy_sha256 != expected.governance_policy_sha256
+        || wire.dataset_schema_sha256 != expected.dataset_schema_sha256
+        || wire.record_sha256 != expected.record_sha256
+        || wire.dispose_after_unix_seconds != policy.dispose_after_unix_seconds
+        || wire.disposition != policy.disposition
+        || wire.sequence != expected.sequence
+        || wire.events.len() != usize::try_from(expected.sequence).unwrap_or(usize::MAX)
+        || wire.events.len() > MAX_LIFECYCLE_EVENTS
+    {
+        return Err(LifecycleError::StateExpectationMismatch);
+    }
+    let mut restored = LifecycleState {
+        schema: LIFECYCLE_STATE_SCHEMA.into(),
+        lifecycle_policy_sha256: expected.lifecycle_policy_sha256.into(),
+        governance_policy_sha256: expected.governance_policy_sha256.into(),
+        dataset_schema_sha256: expected.dataset_schema_sha256.into(),
+        record_sha256: expected.record_sha256.into(),
+        dispose_after_unix_seconds: policy.dispose_after_unix_seconds,
+        disposition: policy.disposition,
+        sequence: 0,
+        phase: LifecyclePhase::Retained,
+        active_legal_hold_id: policy.initial_legal_hold_id.clone(),
+        disposal_order_id: None,
+        evidence_id: None,
+        evidence_sha256: None,
+        events: Vec::new(),
+    };
+    for event in wire.events {
+        let request = LifecycleTransitionRequest {
+            schema: LIFECYCLE_TRANSITION_SCHEMA.into(),
+            lifecycle_policy_sha256: expected.lifecycle_policy_sha256.into(),
+            record_sha256: expected.record_sha256.into(),
+            prior_state_sha256: restored.state_sha256()?,
+            sequence: event.sequence,
+            occurred_at_unix_seconds: event.occurred_at_unix_seconds,
+            actor_id: event.actor_id,
+            action: event.action,
+        };
+        let request_bytes = canonical_request_bytes(&request)?;
+        if hash(&request_bytes) != event.request_sha256 {
+            return Err(LifecycleError::StateExpectationMismatch);
+        }
+        let signature =
+            decode_fixed::<64>(&event.signature).ok_or(LifecycleError::StateExpectationMismatch)?;
+        let transition = authorize_lifecycle_transition(
+            &restored,
+            policy,
+            expected.lifecycle_policy_sha256,
+            &request_bytes,
+            &signature,
+            event.occurred_at_unix_seconds,
+        )?;
+        apply_authorized_lifecycle_transition(&mut restored, transition)?;
+    }
+    if lifecycle_state_bytes(&restored)? != bytes
+        || restored.phase != wire.phase
+        || restored.active_legal_hold_id != wire.active_legal_hold_id
+        || restored.disposal_order_id != wire.disposal_order_id
+        || restored.evidence_id != wire.evidence_id
+        || restored.evidence_sha256 != wire.evidence_sha256
+    {
+        return Err(LifecycleError::StateExpectationMismatch);
+    }
+    Ok(restored)
 }
 
 fn validate_transition_context<'a>(

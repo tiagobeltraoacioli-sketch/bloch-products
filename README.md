@@ -67,8 +67,9 @@ identity, prove finality, activate a network, or authorize asset movement.
   optional scalar fields before the governance decision.
 - Bloch Data lifecycle evidence binds each admitted record to signed legal-hold,
   disposal-order and external-evidence transitions without claiming physical
-  deletion. A salted-record commitment supports offline equality checks but
-  deliberately remains unqualified as a production hiding commitment.
+  deletion. Restart recovery replays every retained signature against
+  independently pinned state roots. A salted-record commitment supports offline
+  equality checks but remains unqualified as a production hiding commitment.
 - `bloch-pay-reconciliation`: pinned payment routes and observation sources,
   canonical invoices, deterministic exact/partial/excess/late matching and
   exact canonical observations authenticated by domain-separated Ed25519
@@ -85,7 +86,8 @@ identity, prove finality, activate a network, or authorize asset movement.
   qualify settlement, credit, replication or HA.
 - `bloch-pay-adjustments`: authenticated, replay-safe observations of
   cancellation, dispute and refund lifecycles bound to the exact payment. It
-  observes events only and never sends refunds or moves funds.
+  observes events only and never sends refunds or moves funds. Canonical state
+  recovery requires independent digest, generation, policy and payment roots.
 - `bloch-indexer-signing-ceremony`: create-once offline delivery and receipt
   signing requests, with operational receipt import routed through the durable
   receiver core. Private keys remain external.

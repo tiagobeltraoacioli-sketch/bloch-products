@@ -18,3 +18,12 @@ This crate does not send cancellations or refunds, connect to a payment rail,
 hold assets, handle private keys, establish finality or settlement, authorize
 credit, or authorize movement/release of funds. All such output flags are
 always `false`.
+
+Adjustment state v2 supports bounded, exact-canonical recovery. Restoration
+requires an independently retained state digest, generation, both policy
+digests and the exact payment identity/digest/amount. It also revalidates the
+complete status-transition chain and duplicate identities. Because compact
+state retains event digests rather than detached signatures, recovery proves
+agreement with the independent state root; it does not reauthenticate the
+original event signatures. Filesystem durability and protected root retention
+remain external responsibilities.

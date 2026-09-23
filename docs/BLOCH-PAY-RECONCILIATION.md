@@ -78,6 +78,9 @@ sequence, authority, source and network. Exact replay is idempotent; conflicting
 identities, invalid transitions and an observed refund above the original
 payment amount fail closed. `refund_observed` is evidence from a configured
 source, not proof that funds settled or authority to credit an account.
+Adjustment state can be rehydrated only when its canonical digest, generation,
+policy roots and exact payment roots match independently retained expectations.
+That recovery does not provide storage durability or HA.
 
 ## Remaining production gates
 

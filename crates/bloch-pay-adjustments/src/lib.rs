@@ -13,9 +13,10 @@ use thiserror::Error;
 
 pub const ADJUSTMENT_POLICY_SCHEMA: &str = "bloch.pay.adjustment-policy.v1";
 pub const ADJUSTMENT_EVENT_SCHEMA: &str = "bloch.pay.adjustment-event.v1";
-pub const ADJUSTMENT_STATE_SCHEMA: &str = "bloch.pay.adjustment-state.v1";
+pub const ADJUSTMENT_STATE_SCHEMA: &str = "bloch.pay.adjustment-state.v2";
 pub const MAX_ADJUSTMENT_EVENTS: usize = 1_024;
 pub const MAX_ADJUSTMENT_POLICY_BYTES: usize = 64 * 1024;
+pub const MAX_ADJUSTMENT_STATE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const SIGNING_DOMAIN: &[u8] = b"BLOCH-PAY-ADJUSTMENT-EVENT-V1\0";
 
@@ -125,7 +126,38 @@ struct AppliedEvent {
     external_reference: String,
     network_event: Option<String>,
     authority_id: String,
+    kind: AdjustmentEventKind,
     resulting_status: AdjustmentStatus,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AdjustmentStateWire {
+    schema: String,
+    adjustment_policy_sha256: String,
+    reconciliation_policy_sha256: String,
+    adjustment_id: String,
+    payment_observation_id: String,
+    payment_observation_sha256: String,
+    payment_amount_minor: u64,
+    generation: u64,
+    status: AdjustmentStatus,
+    applied_events: Vec<AppliedEvent>,
+    settlement_qualified: bool,
+    credit_authorized: bool,
+    funds_moved: bool,
+}
+
+/// Independently retained roots required to recover an adjustment state.
+pub struct AdjustmentStateExpectation<'a> {
+    pub adjustment_policy_sha256: &'a str,
+    pub reconciliation_policy_sha256: &'a str,
+    pub adjustment_id: &'a str,
+    pub payment_observation_id: &'a str,
+    pub payment_observation_sha256: &'a str,
+    pub payment_amount_minor: u64,
+    pub generation: u64,
+    pub state_sha256: &'a str,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -174,6 +206,9 @@ impl AdjustmentState {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("serializing validated adjustment state cannot fail")
     }
+    pub fn state_sha256(&self) -> String {
+        hash(&self.canonical_bytes())
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -202,6 +237,8 @@ pub enum AdjustmentError {
     RefundAmountExceeded,
     #[error("adjustment event limit reached")]
     EventLimit,
+    #[error("adjustment state does not match independently retained expectations")]
+    StateExpectationMismatch,
 }
 
 pub fn adjustment_policy_bytes(policy: &AdjustmentPolicy) -> Result<Vec<u8>, AdjustmentError> {
@@ -380,9 +417,64 @@ pub fn apply_adjustment_event(
         external_reference: event.external_reference.clone(),
         network_event,
         authority_id: authenticated.authority_id.clone(),
+        kind: event.kind,
         resulting_status: status,
     });
     Ok(next)
+}
+
+/// Recovers an opaque state from exact canonical bytes only when an
+/// independently retained digest and complete payment/policy context match.
+pub fn restore_adjustment_state(
+    bytes: &[u8],
+    expected: AdjustmentStateExpectation<'_>,
+) -> Result<AdjustmentState, AdjustmentError> {
+    if bytes.is_empty() || bytes.len() > MAX_ADJUSTMENT_STATE_BYTES {
+        return Err(AdjustmentError::StateExpectationMismatch);
+    }
+    for value in [
+        expected.adjustment_policy_sha256,
+        expected.reconciliation_policy_sha256,
+        expected.payment_observation_sha256,
+        expected.state_sha256,
+    ] {
+        if !valid_sha256(value) {
+            return Err(AdjustmentError::StateExpectationMismatch);
+        }
+    }
+    if hash(bytes) != expected.state_sha256 {
+        return Err(AdjustmentError::StateExpectationMismatch);
+    }
+    let wire: AdjustmentStateWire =
+        serde_json::from_slice(bytes).map_err(|_| AdjustmentError::StateExpectationMismatch)?;
+    let state = AdjustmentState {
+        schema: wire.schema,
+        adjustment_policy_sha256: wire.adjustment_policy_sha256,
+        reconciliation_policy_sha256: wire.reconciliation_policy_sha256,
+        adjustment_id: wire.adjustment_id,
+        payment_observation_id: wire.payment_observation_id,
+        payment_observation_sha256: wire.payment_observation_sha256,
+        payment_amount_minor: wire.payment_amount_minor,
+        generation: wire.generation,
+        status: wire.status,
+        applied_events: wire.applied_events,
+        settlement_qualified: wire.settlement_qualified,
+        credit_authorized: wire.credit_authorized,
+        funds_moved: wire.funds_moved,
+    };
+    validate_state(&state)?;
+    if state.adjustment_policy_sha256 != expected.adjustment_policy_sha256
+        || state.reconciliation_policy_sha256 != expected.reconciliation_policy_sha256
+        || state.adjustment_id != expected.adjustment_id
+        || state.payment_observation_id != expected.payment_observation_id
+        || state.payment_observation_sha256 != expected.payment_observation_sha256
+        || state.payment_amount_minor != expected.payment_amount_minor
+        || state.generation != expected.generation
+        || state.canonical_bytes() != bytes
+    {
+        return Err(AdjustmentError::StateExpectationMismatch);
+    }
+    Ok(state)
 }
 
 fn transition(
@@ -580,7 +672,40 @@ fn validate_state(state: &AdjustmentState) -> Result<(), AdjustmentError> {
     {
         return Err(AdjustmentError::ContextMismatch);
     }
+    let mut status = AdjustmentStatus::Active;
+    let mut event_ids = BTreeSet::new();
+    let mut external_references = BTreeSet::new();
+    let mut network_events = BTreeSet::new();
+    for event in &state.applied_events {
+        let expected_status =
+            transition(status, event.kind).map_err(|_| AdjustmentError::ContextMismatch)?;
+        if !valid_id(&event.event_id)
+            || !valid_sha256(&event.event_sha256)
+            || !valid_id(&event.external_reference)
+            || !valid_id(&event.authority_id)
+            || event.resulting_status != expected_status
+            || !event_ids.insert(&event.event_id)
+            || !external_references.insert(&event.external_reference)
+            || event.network_event.as_ref().is_some_and(|identity| {
+                !valid_network_event(identity) || !network_events.insert(identity)
+            })
+        {
+            return Err(AdjustmentError::ContextMismatch);
+        }
+        status = expected_status;
+    }
+    if state.status != status {
+        return Err(AdjustmentError::ContextMismatch);
+    }
     Ok(())
+}
+
+fn valid_network_event(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_IDENTIFIER_BYTES * 2 + 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
 }
 
 fn network_event(event: &AdjustmentEvent) -> Option<String> {

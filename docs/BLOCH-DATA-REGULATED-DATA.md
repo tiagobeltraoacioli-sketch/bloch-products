@@ -119,6 +119,11 @@ actual retention execution and incident/data-subject workflows are
 implemented and independently qualified, Bloch Data is not admitted to ingest
 production datasets from an exchange or regulated financial institution.
 
+Lifecycle restart recovery requires independently retained state and context
+roots, then replays every signed transition. This detects altered or rolled-back
+local bytes when the independent roots are current; it is not a substitute for
+durable protected storage of those roots.
+
 The intended local/off-chain execution and minimized on-chain verification
 boundary is specified in
 [`BLOCH-DATA-HYBRID-ARCHITECTURE.md`](BLOCH-DATA-HYBRID-ARCHITECTURE.md).

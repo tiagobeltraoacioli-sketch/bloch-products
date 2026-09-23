@@ -250,9 +250,40 @@ fn signed_hold_order_and_evidence_form_a_deterministic_audit_chain() {
     assert!(!state.irreversible_anonymization_proven());
     assert!(!state.regulatory_compliance_proven());
     assert!(!state.external_execution_succeeded());
+    let state_bytes = lifecycle_state_bytes(&state).unwrap();
+    let state_digest = state.state_sha256().unwrap();
+    let restored = restore_lifecycle_state(
+        &state_bytes,
+        &policy,
+        LifecycleStateExpectation {
+            lifecycle_policy_sha256: &pin,
+            governance_policy_sha256: &governance_policy_sha256(&governance).unwrap(),
+            dataset_schema_sha256: &schema_sha,
+            record_sha256: state.record_sha256(),
+            sequence: 4,
+            state_sha256: &state_digest,
+        },
+    )
+    .unwrap();
+    assert_eq!(lifecycle_state_bytes(&restored).unwrap(), state_bytes);
+    assert_eq!(restored.phase(), LifecyclePhase::EvidenceRecorded);
+
+    let mut tampered = state_bytes;
+    tampered.push(b'\n');
     assert_eq!(
-        lifecycle_state_bytes(&state).unwrap(),
-        lifecycle_state_bytes(&state).unwrap()
+        restore_lifecycle_state(
+            &tampered,
+            &policy,
+            LifecycleStateExpectation {
+                lifecycle_policy_sha256: &pin,
+                governance_policy_sha256: &governance_policy_sha256(&governance).unwrap(),
+                dataset_schema_sha256: &schema_sha,
+                record_sha256: state.record_sha256(),
+                sequence: 4,
+                state_sha256: &state_digest,
+            },
+        ),
+        Err(LifecycleError::StateExpectationMismatch)
     );
 }
 
