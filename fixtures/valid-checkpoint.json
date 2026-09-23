@@ -1,0 +1,52 @@
+{
+  "schema": "bloch.verify.checkpoint-bundle.v1",
+  "network": {
+    "network": "bloch-genesis-4",
+    "chainId": 4,
+    "genesisHash": "0x1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "checkpoint": {
+    "height": 840000,
+    "blockHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "stateRoot": "0x3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "policy": {
+    "minimumObservers": 2,
+    "minimumOrganizations": 2,
+    "maximumObservationAgeSeconds": 900,
+    "maximumFutureSkewSeconds": 30
+  },
+  "observations": [
+    {
+      "observerId": "operator-alpha-node-01",
+      "organizationId": "operator-alpha",
+      "endpointSha256": "0x4444444444444444444444444444444444444444444444444444444444444444",
+      "observedAtUnixSeconds": 1790121500,
+      "network": "bloch-genesis-4",
+      "chainId": 4,
+      "genesisHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "checkpointHeight": 840000,
+      "checkpointBlockHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "checkpointStateRoot": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "claimedFinalizedHeight": 840010,
+      "nodeVersion": "bloch-node/4.0.0",
+      "releaseRevision": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "observerId": "operator-beta-node-01",
+      "organizationId": "operator-beta",
+      "endpointSha256": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "observedAtUnixSeconds": 1790121490,
+      "network": "bloch-genesis-4",
+      "chainId": 4,
+      "genesisHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "checkpointHeight": 840000,
+      "checkpointBlockHash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "checkpointStateRoot": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "claimedFinalizedHeight": 840012,
+      "nodeVersion": "bloch-node/4.0.0",
+      "releaseRevision": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
+

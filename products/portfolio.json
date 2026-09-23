@@ -1,0 +1,58 @@
+{
+  "schema": "bloch.products.portfolio.v1",
+  "source": "Bloch_Inc_Products_Services_EN_v3.pdf",
+  "reviewedAt": "2026-09-23",
+  "products": [
+    {
+      "id": "bloch-verify",
+      "priority": "P0",
+      "status": "mvp-implemented",
+      "capabilities": ["operator-package", "checkpoint-comparison", "state-evidence-report"],
+      "gates": ["regular-checkpoint-publication", "independent-nodes", "stable-api"]
+    },
+    {
+      "id": "bloch-data-dev-cloud",
+      "priority": "P1",
+      "status": "planned",
+      "capabilities": ["indexer", "webhooks", "sdk", "sandbox"],
+      "gates": ["complete-indexer", "versioned-api", "observable-availability"]
+    },
+    {
+      "id": "bloch-treasury-pay",
+      "priority": "P2",
+      "status": "design-only",
+      "capabilities": ["policy-wallet", "invoices", "reconciliation", "finality-receipts"],
+      "gates": ["hardened-wallet", "complete-indexing", "documented-credit-policy"]
+    },
+    {
+      "id": "bloch-router-bridge-l2",
+      "priority": "P3",
+      "status": "blocked-by-production-qualification",
+      "capabilities": ["route-comparison", "risk-explanation", "qualified-execution"],
+      "gates": ["settlement-proof", "reserve-reconciliation", "independent-review"]
+    },
+    {
+      "id": "bloch-markets-proof-ledger",
+      "priority": "future",
+      "status": "buildable-non-settlement-software",
+      "capabilities": ["position-reconciliation", "reserve-evidence", "audit-export"],
+      "gates": ["provenance-model", "partner-data-contracts"]
+    },
+    {
+      "id": "bloch-markets-lifecycle-dvp-pvp",
+      "priority": "future",
+      "status": "research-and-partner-pilot",
+      "capabilities": ["asset-lifecycle", "dvp", "pvp"],
+      "gates": ["pfmi-alignment", "licensed-partners", "risk-management", "operational-resilience"]
+    },
+    {
+      "id": "bloch-latam",
+      "priority": "future",
+      "status": "partner-dependent",
+      "capabilities": ["pix-reconciliation", "receivables-observation", "regional-corridors"],
+      "gates": ["authorized-institutions", "legal-structure", "compliance", "settlement-partners"]
+    }
+  ],
+  "research": ["cryptographic-agility", "verifiable-privacy", "pq-credentials"]
+}
+

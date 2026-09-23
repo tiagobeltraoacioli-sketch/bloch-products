@@ -1,0 +1,10 @@
+[package]
+name = "bloch-verify"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bloch-verify-core = { path = "../bloch-verify-core" }
+serde_json.workspace = true
+
