@@ -17,8 +17,10 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:8787/studio/` or `/lab/`. The local server binds only to
-loopback. The deployment artifact is the `public/` directory; this change does
-not include a production deployment or a Cloudflare account configuration.
+loopback. The deployment artifact is the `public/` directory. The existing
+Cloudflare Pages project is `blochmarkets`; its production branch is `main`.
+See the [deployment guide](docs/DEPLOYMENT.md) for preview, publication and
+verification commands.
 `public/_headers` preserves the CSP and browser security headers observed on the
 existing site for hosts supporting that file. Python's preview server does not
 apply those headers.
@@ -73,6 +75,11 @@ Intentional changes to recovered public assets:
   inspectable.
 - `index.html` and `status.json`: identify the dormant canonical native candidate
   separately from the older reference examples and production capability.
+- All three HTML pages: remove the Cloudflare-injected analytics script from
+  recovered response bytes. Removing that script reproduces the original HTML
+  hashes from the previous Cloudflare deployment; the host manages injection.
+- Studio and Lab pages/guides: identify the original runner checkout requirement
+  and document the independent offline inspector in this workspace.
 
 The published planners still reference the original `sandbox/run.py` and
 `sandbox/qualify.py`. Those scripts were not recovered and are not

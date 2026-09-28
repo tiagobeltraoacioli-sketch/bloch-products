@@ -16,6 +16,26 @@ Export a review JSON bundle, CSV index or the selected original receipt. Reopeni
 
 Prepare a local command by selecting a scenario, pinned protocol checkout and new output filename. The command uses the existing Python runner and is quoted for a POSIX shell. The browser never executes it. Run it from the Bloch Markets repository with the exact clean protocol revision, Rust toolchain and cached dependencies. The runner uses offline, locked Cargo execution and refuses existing output filenames.
 
+The command templates require the original sandbox runner checkout. The recovered
+Studio source does not include `sandbox/run.py` or `sandbox/qualify.py`.
+
+## Inspect evidence offline
+
+The recovered application in `bloch-products/apps/bloch-markets` includes a
+Node 22+ inspector that works without the sandbox runners. From that directory:
+
+```sh
+node scripts/inspect.mjs public/studio/examples/lifecycle.json public/studio/examples/native-pair.json public/lab/example.json
+```
+
+Replace the filenames with your receipts, exported Studio review bundles or Lab
+reports. It accepts up to 12 regular UTF-8 JSON files and 16 MiB combined, checks
+receipt checksums and recomputes source comparisons. It makes no network calls
+and writes one JSON assessment after all files validate. Exit 0 means matching
+source claims and passing reported cases; exit 2 preserves valid mismatches or
+failed/ignored outcomes; exit 1 means invalid input. It does not execute Ustav or
+attest that the reported run occurred.
+
 ## Capability boundary
 
 This is a local reference workflow. No hosted lifecycle API, wallet connection, chain transaction, production finality, asset backing or live native DEX AMM is provided. Consult `/status.json` for the machine-readable capability boundary and `/schemas/` for the two receipt contracts. Network observation is available separately at https://ops-blochinc.xyz/monitor/.
