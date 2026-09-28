@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blochmarkets.xyz/schemas/local-ustav-pair-receipt-v1.json",
+  "title": "Local Ustav native pair reference receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_kind", "environment", "chain_transaction", "production_finality", "generated_at_utc", "provenance", "result"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "receipt_kind": { "const": "local_ustav_pair_reference_run" },
+    "environment": { "const": "local_sandbox_only" },
+    "chain_transaction": { "const": false },
+    "production_finality": { "const": false },
+    "generated_at_utc": { "type": "string", "format": "date-time" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "rust_toolchain", "command", "cargo_lock_sha256", "example_sha256", "relevant_worktree_clean"],
+      "properties": {
+        "repository": { "type": "string", "format": "uri" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "rust_toolchain": { "type": "string" },
+        "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "cargo_lock_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "example_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "relevant_worktree_clean": { "const": true }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["independently_owned_assets", "joint_hybrid_owner_authorization", "atomic_local_settlement", "spent_input_replay_rejected", "illustrative_asset_only", "backing_or_redemption_implemented"],
+      "properties": {
+        "independently_owned_assets": { "const": 2 },
+        "joint_hybrid_owner_authorization": { "const": true },
+        "atomic_local_settlement": { "const": true },
+        "spent_input_replay_rejected": { "const": true },
+        "illustrative_asset_only": { "const": true },
+        "backing_or_redemption_implemented": { "const": false }
+      }
+    }
+  }
+}

@@ -10,6 +10,10 @@ identity, prove finality, activate a network, or authorize asset movement.
 
 ## Implemented now
 
+- [Bloch Markets Studio](apps/bloch-markets/README.md): recovered public receipt
+  and qualification workspaces, strict imported-outcome validation, and a bounded
+  offline evidence inspector. See the [cross-repository development map](docs/BLOCH-MARKETS-DEVELOPMENT.md)
+  for the reference kernel, dormant native integration candidate and remaining work.
 - `bloch-verify-core`: strict evidence schema, canonical digest and assessment.
 - External operator trust policies pinned by an independently retained SHA-256.
 - Domain-separated Ed25519 verification for exact node observations.

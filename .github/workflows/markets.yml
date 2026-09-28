@@ -1,0 +1,27 @@
+name: Bloch Markets
+
+on:
+  push:
+    paths:
+      - 'apps/bloch-markets/**'
+      - '.github/workflows/markets.yml'
+  pull_request:
+    paths:
+      - 'apps/bloch-markets/**'
+      - '.github/workflows/markets.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm test
+        working-directory: apps/bloch-markets
+      - run: node scripts/inspect.mjs public/studio/examples/lifecycle.json public/studio/examples/native-pair.json public/lab/example.json
+        working-directory: apps/bloch-markets

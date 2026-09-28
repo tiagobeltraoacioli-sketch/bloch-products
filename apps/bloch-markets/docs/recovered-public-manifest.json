@@ -1,0 +1,163 @@
+{
+  "origin": "https://blochmarkets.xyz",
+  "recovered_at_utc": "2026-09-28T19:10:06.773926+00:00",
+  "scope": "Public static assets only; not the original source repository or private runner tooling",
+  "files": [
+    {
+      "url": "https://blochmarkets.xyz/assets/bloch-inc-logo-dark.png",
+      "path": "public/assets/bloch-inc-logo-dark.png",
+      "bytes": 260109,
+      "sha256": "3b905d5f3e3e2ce06cfc1570cdc91bc07e7c26cd92be0ebaf7c9d0527ee58411"
+    },
+    {
+      "url": "https://blochmarkets.xyz/assets/favicon.png",
+      "path": "public/assets/favicon.png",
+      "bytes": 34461,
+      "sha256": "fd4bb6b3efe954e880f7a593a7ec895d44e8185aca641fb2570bd80decfcfe42"
+    },
+    {
+      "url": "https://blochmarkets.xyz/assets/markets.css",
+      "path": "public/assets/markets.css",
+      "bytes": 6965,
+      "sha256": "b3b511fc0220379660b9a3db251aad2129beb2f8d1f94a4d897cb16665abae69"
+    },
+    {
+      "url": "https://blochmarkets.xyz/assets/roadmap.css",
+      "path": "public/assets/roadmap.css",
+      "bytes": 6945,
+      "sha256": "6fea7f62fd3005fa50a5e4ebbba02e459f05d51201a0ac2948301c1eae7d7a02"
+    },
+    {
+      "url": "https://blochmarkets.xyz/assets/site.css",
+      "path": "public/assets/site.css",
+      "bytes": 22322,
+      "sha256": "50f254e988fa6019940a64ef2bdd9e2b0922ab7debb8bd4e2879b2f0f62889b1"
+    },
+    {
+      "url": "https://blochmarkets.xyz/assets/site.js",
+      "path": "public/assets/site.js",
+      "bytes": 1485,
+      "sha256": "73d55748802bea75b7b77fb638e5cf78b9df0e5c50059cc1bc603cd5ee4a2dbb"
+    },
+    {
+      "url": "https://blochmarkets.xyz/",
+      "path": "public/index.html",
+      "bytes": 11751,
+      "sha256": "1c8cd8b01f5f9a93473f0d966749f75e356b48f03ad5cfe899beaad9f37237ce"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/GUIDE.md",
+      "path": "public/lab/GUIDE.md",
+      "bytes": 4026,
+      "sha256": "4777b1aae528fd50c0b5aeeace5cd30e008414f5329cfc453bcad75311bc475e"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/app.mjs",
+      "path": "public/lab/app.mjs",
+      "bytes": 16616,
+      "sha256": "679d9a55f3752bd495132541175409565b7046b037c0695cd7597241559c93ab"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/catalog.json",
+      "path": "public/lab/catalog.json",
+      "bytes": 5276,
+      "sha256": "e23582afc34e1a038e73fc94a498eaaf37a29e2c13df2b010e63a13e953db33e"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/example.json",
+      "path": "public/lab/example.json",
+      "bytes": 4169,
+      "sha256": "c390aad9d40f48d8d669296e8a13fd9103de88923a75b0e0290db9032a702a3c"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/",
+      "path": "public/lab/index.html",
+      "bytes": 8517,
+      "sha256": "2a10befc64ea634fdac0863f8c77b062dc7587fbcad99e8b96401fd632ed496d"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/model.mjs",
+      "path": "public/lab/model.mjs",
+      "bytes": 7365,
+      "sha256": "69cefb3b40a5132fe1fcb82d74ef2c53aa8b8043648629a2f977559936668d54"
+    },
+    {
+      "url": "https://blochmarkets.xyz/lab/style.css",
+      "path": "public/lab/style.css",
+      "bytes": 4848,
+      "sha256": "3483e2b6aa5e7cd51295f1a5deb1e9183ff1a4aff7f3e9d07ab9e5c5ca064736"
+    },
+    {
+      "url": "https://blochmarkets.xyz/schemas/local-qualification-v1.json",
+      "path": "public/schemas/local-qualification-v1.json",
+      "bytes": 17528,
+      "sha256": "910af494f839d5d9607283c2df3b2ef5b76ba0c0ad572f106e929e0d808066d6"
+    },
+    {
+      "url": "https://blochmarkets.xyz/schemas/local-ustav-pair-receipt-v1.json",
+      "path": "public/schemas/local-ustav-pair-receipt-v1.json",
+      "bytes": 2150,
+      "sha256": "a256e941c39518cf707c5d400071d7a7b0f3c0917c2326cb84a8c120d59addde"
+    },
+    {
+      "url": "https://blochmarkets.xyz/schemas/local-ustav-receipt-v1.json",
+      "path": "public/schemas/local-ustav-receipt-v1.json",
+      "bytes": 2144,
+      "sha256": "b031ce13ff5ea05835c5a3e5d8f09f790db92507b5674d7f70c4d8bd0eaa3a5c"
+    },
+    {
+      "url": "https://blochmarkets.xyz/status.json",
+      "path": "public/status.json",
+      "bytes": 1387,
+      "sha256": "14ce2112681b861573117184026c4ccfa7d1f859b7c62c2ea846a3a25aa98375"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/GUIDE.md",
+      "path": "public/studio/GUIDE.md",
+      "bytes": 2709,
+      "sha256": "b63bc060a1b2ad2d0f8c93934d88abbc16307e1f28253236081f419269da1f1b"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/app.mjs",
+      "path": "public/studio/app.mjs",
+      "bytes": 14114,
+      "sha256": "05b98a46d44437b3183b1d424f763724f8e6fac50fb8f05427aac888446388ec"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/contract.json",
+      "path": "public/studio/contract.json",
+      "bytes": 1487,
+      "sha256": "aa7b689403b9c667b719352d1ed91043b1c2fcb88c197292987204426fdc4c60"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/examples/lifecycle.json",
+      "path": "public/studio/examples/lifecycle.json",
+      "bytes": 1185,
+      "sha256": "70623236672845973228b73ac44f7d70b4132ff163f4c9c8a94f4dc3fecbd602"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/examples/native-pair.json",
+      "path": "public/studio/examples/native-pair.json",
+      "bytes": 1105,
+      "sha256": "26a243b9243e1cf93046dcbce54d005064f3e38afa3f69bf59e02d8d52683688"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/",
+      "path": "public/studio/index.html",
+      "bytes": 7826,
+      "sha256": "87cd8dc8d1542efc491458e21104ed12bf57f993b63aeba9db1b73d7ee5a546d"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/receipt.mjs",
+      "path": "public/studio/receipt.mjs",
+      "bytes": 8300,
+      "sha256": "1d5076dfbb9f0d0aefcebb05c4bd500c36a45e60bc04c95b66d2054fc06eee02"
+    },
+    {
+      "url": "https://blochmarkets.xyz/studio/style.css",
+      "path": "public/studio/style.css",
+      "bytes": 11769,
+      "sha256": "e901023e76028fc53ef7e0a8d4151319d82623ee9706da5597f2e01e2aba8fa1"
+    }
+  ]
+}

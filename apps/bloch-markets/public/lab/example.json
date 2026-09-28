@@ -1,0 +1,151 @@
+{
+  "chain_transaction": false,
+  "environment": "local_sandbox_only",
+  "finished_at_utc": "2026-09-24T15:04:23.074668+00:00",
+  "production_finality": false,
+  "provenance": {
+    "cargo_lock_sha256": "fd7d47421da843c0ee0b2d3fee0b913ec7bdf465c73b1dacc0fe12f80026ca46",
+    "relevant_worktree_clean": true,
+    "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+    "revision": "2da509438542c72d1f9bb2ca7437798e2a9b21ab",
+    "rust_toolchain": "1.94.1"
+  },
+  "schema": "bloch-markets-qualification/1",
+  "started_at_utc": "2026-09-24T15:04:18.340108+00:00",
+  "suites": [
+    {
+      "cases": [
+        {
+          "id": "classical_shaped_owner_key_is_not_native_authorization",
+          "status": "passed"
+        },
+        {
+          "id": "malformed_keys_suites_and_each_tampered_signature_leg_fail",
+          "status": "passed"
+        },
+        {
+          "id": "native_custody_requires_two_real_pq_custodians_plus_owner",
+          "status": "passed"
+        },
+        {
+          "id": "real_hybrid_registration_mint_transfer_and_burn",
+          "status": "passed"
+        }
+      ],
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "crypto_kernel",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ],
+      "elapsed_ms": 1480,
+      "exit_code": 0,
+      "harness_seconds": 0.7,
+      "id": "crypto_kernel",
+      "source_sha256": "ae0a0e72f8335c2fe03098eb1bcc9e69a37e18638e7cc15eecbaa602f32358f9",
+      "stderr_sha256": "0f9a83d1259fb2c8f2b60bbf745ffc89d74015e721ef8af017615fd1484b3480",
+      "stdout_sha256": "d19d81c7abfe44bde6501168c7e1a5d4f382a18c2875c71197ab1cb4c04c294c",
+      "summary": {
+        "failed": 0,
+        "ignored": 0,
+        "passed": 4
+      }
+    },
+    {
+      "cases": [
+        {
+          "id": "either_tampered_hybrid_component_in_second_leg_rolls_back_first",
+          "status": "passed"
+        },
+        {
+          "id": "hybrid_joint_authorization_exchanges_both_native_assets",
+          "status": "passed"
+        },
+        {
+          "id": "ordinary_leg_signatures_cannot_authorize_pair_owners_or_governance",
+          "status": "passed"
+        }
+      ],
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "native_pairs_crypto",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ],
+      "elapsed_ms": 1425,
+      "exit_code": 0,
+      "harness_seconds": 1.02,
+      "id": "native_pairs_crypto",
+      "source_sha256": "473a1f0292ae914fdd0a63bc5a0ce99933a9a9ac3300565ea403b4e6404e6f8e",
+      "stderr_sha256": "0f9a83d1259fb2c8f2b60bbf745ffc89d74015e721ef8af017615fd1484b3480",
+      "stdout_sha256": "66ae0cf06bd15d73ed5dc72814061b65c5d982987fdfc205022a41704ee5adb2",
+      "summary": {
+        "failed": 0,
+        "ignored": 0,
+        "passed": 3
+      }
+    },
+    {
+      "cases": [
+        {
+          "id": "real_pq_pool_custody_add_swap_lp_theft_rejection_remove_and_restore",
+          "status": "passed"
+        }
+      ],
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "native_pool_crypto",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ],
+      "elapsed_ms": 1731,
+      "exit_code": 0,
+      "harness_seconds": 1.33,
+      "id": "native_pool_crypto",
+      "source_sha256": "e12fc315fa562d37f7830bf388dae6a1012dec6eb9c52f2b8b95a6ecd56e3f72",
+      "stderr_sha256": "0f9a83d1259fb2c8f2b60bbf745ffc89d74015e721ef8af017615fd1484b3480",
+      "stdout_sha256": "d44528113c445f8f07d21403b31d7b35b5894284bf383723e3c9138cfffb4b29",
+      "summary": {
+        "failed": 0,
+        "ignored": 0,
+        "passed": 1
+      }
+    }
+  ]
+}

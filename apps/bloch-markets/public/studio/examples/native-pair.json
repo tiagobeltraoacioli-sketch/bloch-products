@@ -1,0 +1,36 @@
+{
+  "chain_transaction": false,
+  "environment": "local_sandbox_only",
+  "generated_at_utc": "2026-09-24T14:35:57.223631+00:00",
+  "production_finality": false,
+  "provenance": {
+    "cargo_lock_sha256": "fd7d47421da843c0ee0b2d3fee0b913ec7bdf465c73b1dacc0fe12f80026ca46",
+    "command": [
+      "cargo",
+      "+1.94.1",
+      "run",
+      "--offline",
+      "--locked",
+      "-q",
+      "-p",
+      "bloch-ustav",
+      "--example",
+      "native_pair"
+    ],
+    "example_sha256": "c5e5b1e8c1f4a9376ab22db8bda7a94f03a23af8de2eae8f0cd5e3c80ca9262a",
+    "relevant_worktree_clean": true,
+    "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+    "revision": "2da509438542c72d1f9bb2ca7437798e2a9b21ab",
+    "rust_toolchain": "1.94.1"
+  },
+  "receipt_kind": "local_ustav_pair_reference_run",
+  "result": {
+    "atomic_local_settlement": true,
+    "backing_or_redemption_implemented": false,
+    "illustrative_asset_only": true,
+    "independently_owned_assets": 2,
+    "joint_hybrid_owner_authorization": true,
+    "spent_input_replay_rejected": true
+  },
+  "schema_version": 1
+}

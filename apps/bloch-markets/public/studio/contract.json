@@ -1,0 +1,48 @@
+{
+  "schema": "bloch-markets-studio-contract/1",
+  "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+  "revision": "2da509438542c72d1f9bb2ca7437798e2a9b21ab",
+  "rust_toolchain": "1.94.1",
+  "cargo_lock_sha256": "fd7d47421da843c0ee0b2d3fee0b913ec7bdf465c73b1dacc0fe12f80026ca46",
+  "execution_mode": "local_reference",
+  "chain_connected": false,
+  "production_finality": false,
+  "scenarios": {
+    "lifecycle": {
+      "example_sha256": "912a7602e59bd45a5dcb17fd669131908ad10e211c2db2cdd90176a094fe4042",
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "run",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--example",
+        "lifecycle"
+      ],
+      "sample": "./examples/lifecycle.json",
+      "sample_sha256": "70623236672845973228b73ac44f7d70b4132ff163f4c9c8a94f4dc3fecbd602",
+      "generated_at_utc": "2026-09-24T14:35:55.821936+00:00"
+    },
+    "native_pair": {
+      "example_sha256": "c5e5b1e8c1f4a9376ab22db8bda7a94f03a23af8de2eae8f0cd5e3c80ca9262a",
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "run",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--example",
+        "native_pair"
+      ],
+      "sample": "./examples/native-pair.json",
+      "sample_sha256": "26a243b9243e1cf93046dcbce54d005064f3e38afa3f69bf59e02d8d52683688",
+      "generated_at_utc": "2026-09-24T14:35:57.223631+00:00"
+    }
+  }
+}

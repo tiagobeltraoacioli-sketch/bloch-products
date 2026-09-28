@@ -1,0 +1,140 @@
+{
+  "schema": "bloch-markets-qualification-catalog/1",
+  "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+  "revision": "2da509438542c72d1f9bb2ca7437798e2a9b21ab",
+  "rust_toolchain": "1.94.1",
+  "cargo_lock_sha256": "fd7d47421da843c0ee0b2d3fee0b913ec7bdf465c73b1dacc0fe12f80026ca46",
+  "environment": "local_sandbox_only",
+  "chain_transaction": false,
+  "production_finality": false,
+  "suites": [
+    {
+      "id": "crypto_kernel",
+      "title": "Hybrid authorization kernel",
+      "cases": [
+        {
+          "id": "real_hybrid_registration_mint_transfer_and_burn",
+          "title": "Signed asset lifecycle",
+          "focus": "Lifecycle",
+          "expectation": "Registration, mint, transfer and burn complete; a forged transfer is rejected without changing the snapshot; final supply is zero and the snapshot restores."
+        },
+        {
+          "id": "malformed_keys_suites_and_each_tampered_signature_leg_fail",
+          "title": "Malformed keys and signature tampering",
+          "focus": "Authorization",
+          "expectation": "Malformed key lengths, suite encodings, changed hybrid signature components and wrong messages fail verification."
+        },
+        {
+          "id": "native_custody_requires_two_real_pq_custodians_plus_owner",
+          "title": "Two custodians plus the owner",
+          "focus": "Authorization",
+          "expectation": "Missing custodian authorization rejects mint without changing the snapshot; transfer requires the owner and both configured custodians."
+        },
+        {
+          "id": "classical_shaped_owner_key_is_not_native_authorization",
+          "title": "Classical-shaped owner key rejection",
+          "focus": "Authorization",
+          "expectation": "An output using a classical-shaped owner key is rejected and the local snapshot remains unchanged."
+        }
+      ],
+      "source_path": "crates/bloch-ustav/tests/crypto_kernel.rs",
+      "source_sha256": "ae0a0e72f8335c2fe03098eb1bcc9e69a37e18638e7cc15eecbaa602f32358f9",
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "crypto_kernel",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ]
+    },
+    {
+      "id": "native_pairs_crypto",
+      "title": "Atomic native-pair reference",
+      "cases": [
+        {
+          "id": "hybrid_joint_authorization_exchanges_both_native_assets",
+          "title": "Joint authorization and replay rejection",
+          "focus": "Settlement",
+          "expectation": "Both native assets exchange with unchanged supplies; replay is rejected without changing the settled snapshot, which restores successfully."
+        },
+        {
+          "id": "either_tampered_hybrid_component_in_second_leg_rolls_back_first",
+          "title": "Second-leg tampering rolls back the pair",
+          "focus": "Atomicity",
+          "expectation": "Tampering with either hybrid signature component in the second leg rejects settlement and preserves the entire pre-settlement snapshot."
+        },
+        {
+          "id": "ordinary_leg_signatures_cannot_authorize_pair_owners_or_governance",
+          "title": "Single-leg signatures cannot authorize a pair",
+          "focus": "Authorization",
+          "expectation": "Ordinary transaction signatures cannot substitute for joint pair authorization by owners or governance; each rejection preserves the snapshot."
+        }
+      ],
+      "source_path": "crates/bloch-ustav/tests/native_pairs_crypto.rs",
+      "source_sha256": "473a1f0292ae914fdd0a63bc5a0ce99933a9a9ac3300565ea403b4e6404e6f8e",
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "native_pairs_crypto",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ]
+    },
+    {
+      "id": "native_pool_crypto",
+      "title": "Local pool custody prototype",
+      "cases": [
+        {
+          "id": "real_pq_pool_custody_add_swap_lp_theft_rejection_remove_and_restore",
+          "title": "Pool custody and position ownership",
+          "focus": "Custody",
+          "expectation": "The local prototype adds liquidity, swaps, rejects replay and position theft, restores reserve locks and ownership, removes the authorized position, and preserves each asset supply. This does not activate a live AMM."
+        }
+      ],
+      "source_path": "crates/bloch-ustav/tests/native_pool_crypto.rs",
+      "source_sha256": "e12fc315fa562d37f7830bf388dae6a1012dec6eb9c52f2b8b95a6ecd56e3f72",
+      "command": [
+        "cargo",
+        "+1.94.1",
+        "test",
+        "--offline",
+        "--locked",
+        "-q",
+        "-p",
+        "bloch-ustav",
+        "--test",
+        "native_pool_crypto",
+        "--",
+        "--test-threads=1",
+        "--format",
+        "pretty",
+        "--color",
+        "never"
+      ]
+    }
+  ],
+  "example": "./example.json",
+  "example_sha256": "c390aad9d40f48d8d669296e8a13fd9103de88923a75b0e0290db9032a702a3c"
+}

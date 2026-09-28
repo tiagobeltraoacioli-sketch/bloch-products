@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "service": "Bloch Markets",
+  "reviewed_at": "2026-09-28",
+  "stage": "proposed_infrastructure",
+  "source": {
+    "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+    "revision": "2da509438542c72d1f9bb2ca7437798e2a9b21ab"
+  },
+  "native_integration_candidate": {
+    "repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow",
+    "revision": "8fa9ee1991fccf587ebdc63b08fb9e8ff0469d11",
+    "status": "dormant_canonical_implementation",
+    "source_contract": "https://github.com/tiagobeltraoacioli-sketch/bloch-sis-pow/blob/8fa9ee1991fccf587ebdc63b08fb9e8ff0469d11/crates/bloch-pos-committee/docs/native-consensus-integration-status.md",
+    "production_gates_enabled": false,
+    "covered_by_published_qualification_report": false
+  },
+  "sandbox_receipt_schemas": {
+    "lifecycle": "https://blochmarkets.xyz/schemas/local-ustav-receipt-v1.json",
+    "native_pair": "https://blochmarkets.xyz/schemas/local-ustav-pair-receipt-v1.json"
+  },
+  "capabilities": {
+    "ustav_lifecycle": "local_reference",
+    "native_pair": "local_reference",
+    "native_token_pool": "local_reference",
+    "genesis4_native_execution": false,
+    "hosted_lifecycle_api": false,
+    "native_dex_amm": false,
+    "developer_studio": "local_receipt_inspection",
+    "qualification_lab": "local_named_test_evidence"
+  },
+  "chain_connected": false,
+  "production_finality": false,
+  "developer_studio": {
+    "url": "https://blochmarkets.xyz/studio/",
+    "contract": "https://blochmarkets.xyz/studio/contract.json",
+    "run_attestation": false,
+    "local_import_export": true
+  },
+  "qualification_lab": {
+    "url": "https://blochmarkets.xyz/lab/",
+    "catalog": "https://blochmarkets.xyz/lab/catalog.json",
+    "report_schema": "https://blochmarkets.xyz/schemas/local-qualification-v1.json",
+    "expected_named_cases": 8,
+    "run_attestation": false
+  }
+}
