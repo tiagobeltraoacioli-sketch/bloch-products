@@ -65,6 +65,29 @@ The site was not found in the available GitHub trees or cached object paths.
 Its recovery is explicitly recorded rather than presented as original history.
 The original Python sandbox runners remain unavailable in this checkout.
 
+## Published web release
+
+The web increment at `b58976fd54d117109df7a3af3fea3d051d57023b` was published to
+the existing Cloudflare Pages project `blochmarkets` on 2026-09-28, after a
+separate preview deployment. Production is available at
+[blochmarkets.xyz](https://blochmarkets.xyz/) and immutable deployment
+[`a052e213`](https://a052e213.blochmarkets.pages.dev).
+
+All 26 asset paths were retained: 19 kept their original Cloudflare asset hashes
+and seven changed intentionally. The 22 Node tests, offline example inspection,
+GitHub Markets workflow and repository CI passed. Chromium checks passed locally,
+on the preview and on the production domain, covering import/export, malformed
+outcome rejection without losing the workspace, filtering, graph controls and
+390-pixel mobile layouts. All production asset bytes and security headers were
+checked against the committed release, allowing only the known host-injected
+analytics script in HTML responses.
+
+The [release record](releases/bloch-markets-2026-09-28.json) retains the source
+revision, deployment IDs, previous production rollback target, asset hashes and
+validation results. This publication updates the static inspection tools and
+guidance; the Python runner recovery and native integration work below remain
+open.
+
 ## Next implementation sequence
 
 1. Recover or reconstruct the original bounded sandbox runners and prove fresh

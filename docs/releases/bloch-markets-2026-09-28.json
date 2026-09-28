@@ -1,0 +1,274 @@
+{
+  "schema": "bloch-markets-web-release/1",
+  "verified_at_utc": "2026-09-28T21:14:35.262285+00:00",
+  "source_repository": "https://github.com/tiagobeltraoacioli-sketch/bloch-products",
+  "source_branch": "codex/bloch-markets-studio-20260928",
+  "project": "blochmarkets",
+  "environment": "production",
+  "deployment_id": "a052e213-c4f1-458b-a682-e37a7d77a1ab",
+  "deployment_url": "https://a052e213.blochmarkets.pages.dev",
+  "verified_url": "https://blochmarkets.xyz",
+  "source_commit": "b58976fd54d117109df7a3af3fea3d051d57023b",
+  "canonical_deployment_id": "a052e213-c4f1-458b-a682-e37a7d77a1ab",
+  "uses_functions": false,
+  "asset_count": 26,
+  "unchanged_asset_count": 19,
+  "assets": [
+    {
+      "path": "/assets/bloch-inc-logo-dark.png",
+      "sha256": "3b905d5f3e3e2ce06cfc1570cdc91bc07e7c26cd92be0ebaf7c9d0527ee58411",
+      "content_type": "image/png",
+      "security_headers_match": true
+    },
+    {
+      "path": "/assets/favicon.png",
+      "sha256": "fd4bb6b3efe954e880f7a593a7ec895d44e8185aca641fb2570bd80decfcfe42",
+      "content_type": "image/png",
+      "security_headers_match": true
+    },
+    {
+      "path": "/assets/markets.css",
+      "sha256": "b3b511fc0220379660b9a3db251aad2129beb2f8d1f94a4d897cb16665abae69",
+      "content_type": "text/css; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/assets/roadmap.css",
+      "sha256": "6fea7f62fd3005fa50a5e4ebbba02e459f05d51201a0ac2948301c1eae7d7a02",
+      "content_type": "text/css; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/assets/site.css",
+      "sha256": "50f254e988fa6019940a64ef2bdd9e2b0922ab7debb8bd4e2879b2f0f62889b1",
+      "content_type": "text/css; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/assets/site.js",
+      "sha256": "73d55748802bea75b7b77fb638e5cf78b9df0e5c50059cc1bc603cd5ee4a2dbb",
+      "content_type": "application/javascript",
+      "security_headers_match": true
+    },
+    {
+      "path": "/index.html",
+      "sha256": "af40a11e70603896692e2521e35cb6d251e5660fd772ed7915b668c415287d84",
+      "content_type": "text/html; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/GUIDE.md",
+      "sha256": "ddbb9e4dbc20ef14a83ad790bfec9a63d424e5d78c36cef12d1beb033bcb31b5",
+      "content_type": "text/markdown; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/app.mjs",
+      "sha256": "679d9a55f3752bd495132541175409565b7046b037c0695cd7597241559c93ab",
+      "content_type": "application/javascript",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/catalog.json",
+      "sha256": "e23582afc34e1a038e73fc94a498eaaf37a29e2c13df2b010e63a13e953db33e",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/example.json",
+      "sha256": "c390aad9d40f48d8d669296e8a13fd9103de88923a75b0e0290db9032a702a3c",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/index.html",
+      "sha256": "70d62a381e2dd42de7645626b74162c9e29723e5ebfff791c58f3efd32254f7c",
+      "content_type": "text/html; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/model.mjs",
+      "sha256": "8252853acfbe8adc2e2e961589e22cee5e84e427ddf54da40ebd1556d6cbbb54",
+      "content_type": "application/javascript",
+      "security_headers_match": true
+    },
+    {
+      "path": "/lab/style.css",
+      "sha256": "3483e2b6aa5e7cd51295f1a5deb1e9183ff1a4aff7f3e9d07ab9e5c5ca064736",
+      "content_type": "text/css; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/schemas/local-qualification-v1.json",
+      "sha256": "910af494f839d5d9607283c2df3b2ef5b76ba0c0ad572f106e929e0d808066d6",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/schemas/local-ustav-pair-receipt-v1.json",
+      "sha256": "a256e941c39518cf707c5d400071d7a7b0f3c0917c2326cb84a8c120d59addde",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/schemas/local-ustav-receipt-v1.json",
+      "sha256": "b031ce13ff5ea05835c5a3e5d8f09f790db92507b5674d7f70c4d8bd0eaa3a5c",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/status.json",
+      "sha256": "964376524dd0e32aab92b02fa911d651d7fea56a4c3278d8561e28fd5fb8b5ce",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/GUIDE.md",
+      "sha256": "6620b44ca50b1b7a0c49f004d25114a21c6d85106c451f0d23f88e11c045cc40",
+      "content_type": "text/markdown; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/app.mjs",
+      "sha256": "05b98a46d44437b3183b1d424f763724f8e6fac50fb8f05427aac888446388ec",
+      "content_type": "application/javascript",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/contract.json",
+      "sha256": "aa7b689403b9c667b719352d1ed91043b1c2fcb88c197292987204426fdc4c60",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/examples/lifecycle.json",
+      "sha256": "70623236672845973228b73ac44f7d70b4132ff163f4c9c8a94f4dc3fecbd602",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/examples/native-pair.json",
+      "sha256": "26a243b9243e1cf93046dcbce54d005064f3e38afa3f69bf59e02d8d52683688",
+      "content_type": "application/json",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/index.html",
+      "sha256": "bce690edeb9dae01921c2ecd601067bbec53d1f82cca724cf7926bde7402abeb",
+      "content_type": "text/html; charset=utf-8",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/receipt.mjs",
+      "sha256": "1d5076dfbb9f0d0aefcebb05c4bd500c36a45e60bc04c95b66d2054fc06eee02",
+      "content_type": "application/javascript",
+      "security_headers_match": true
+    },
+    {
+      "path": "/studio/style.css",
+      "sha256": "e901023e76028fc53ef7e0a8d4151319d82623ee9706da5597f2e01e2aba8fa1",
+      "content_type": "text/css; charset=utf-8",
+      "security_headers_match": true
+    }
+  ],
+  "previous_production_deployment": {
+    "id": "24d9825d-0f4e-49e1-923e-2148107c672f",
+    "url": "https://24d9825d.blochmarkets.pages.dev"
+  },
+  "preview_deployment": {
+    "deployment_id": "b63be5b2-5b6e-47d5-a8d9-48d4e456785d",
+    "deployment_url": "https://b63be5b2.blochmarkets.pages.dev"
+  },
+  "cloudflare_asset_manifest": {
+    "/assets/bloch-inc-logo-dark.png": "3a1556cfcf62be9ceda5324a6f7446de",
+    "/assets/favicon.png": "adc741932db7a0f9e09ee909a685ba97",
+    "/assets/markets.css": "47951cdfceef409f42ac85f7df455fec",
+    "/assets/roadmap.css": "5d60ab6e9b5aa91c8a76777b3885cc5d",
+    "/assets/site.css": "dd5ea2cdd4068a0f1968f7d4dbc4647c",
+    "/assets/site.js": "9f4c20159493a51872cab775c1cc051d",
+    "/index.html": "080cf7d6df02e101daa5ae9986f989df",
+    "/lab/GUIDE.md": "ff364f0f68753b7f521b4503b43b48d1",
+    "/lab/app.mjs": "443163f591006e74c1c6fc16284eb2b5",
+    "/lab/catalog.json": "e8016a549d8b8bf98730d06eb4865959",
+    "/lab/example.json": "dd796218ddeba513da6db3fba2a8392a",
+    "/lab/index.html": "19950125a1fd692235c32f176dec03b1",
+    "/lab/model.mjs": "015b37ceac377ea068e273aad2f36c64",
+    "/lab/style.css": "fcafc25ab9f4280b0c4e26d6e718161c",
+    "/schemas/local-qualification-v1.json": "6855d4ada91183d6127190fc62215c07",
+    "/schemas/local-ustav-pair-receipt-v1.json": "66d76bbf681a775f18aa9a325069f50b",
+    "/schemas/local-ustav-receipt-v1.json": "1667a4882bc7cdcd2d6d9d0db7b55cd5",
+    "/status.json": "18a6ef05a556c7748b9f96195820af0d",
+    "/studio/GUIDE.md": "1ae2754871deddbf6fa662c954d6e415",
+    "/studio/app.mjs": "8dbab51474e2e93fd12cf5f5e24c64ed",
+    "/studio/contract.json": "bf33231a2cb369b1ee6124b69f1b6aac",
+    "/studio/examples/lifecycle.json": "0da282c9fd28b8cd2be4ce7c4b3594c0",
+    "/studio/examples/native-pair.json": "800fd5266205c6573e1c25d37d63ca48",
+    "/studio/index.html": "18676f51c77db990b5a47822188b8cca",
+    "/studio/receipt.mjs": "47d12cdcc0f6195064ed768c9c6d77dd",
+    "/studio/style.css": "939106f2ed8a8f30ccb5d09a66a458fc"
+  },
+  "changed_asset_paths": [
+    "/index.html",
+    "/lab/GUIDE.md",
+    "/lab/index.html",
+    "/lab/model.mjs",
+    "/status.json",
+    "/studio/GUIDE.md",
+    "/studio/index.html"
+  ],
+  "validation": {
+    "node_tests": {
+      "passed": 22,
+      "failed": 0
+    },
+    "offline_inspection": {
+      "receipts": 2,
+      "qualification_reports": 1,
+      "reported_named_cases": 8,
+      "source_claims_match": true
+    },
+    "github_checks": [
+      {
+        "name": "Bloch Markets",
+        "conclusion": "success",
+        "url": "https://github.com/tiagobeltraoacioli-sketch/bloch-products/actions/runs/36481487124"
+      },
+      {
+        "name": "ci",
+        "conclusion": "success",
+        "url": "https://github.com/tiagobeltraoacioli-sketch/bloch-products/actions/runs/36481487156"
+      }
+    ],
+    "browser": {
+      "engine": "Chromium",
+      "environments": [
+        "local",
+        "cloudflare_preview",
+        "blochmarkets.xyz"
+      ],
+      "viewport_widths": [
+        1440,
+        390
+      ],
+      "passed": [
+        "home status",
+        "both receipt samples",
+        "review export/import",
+        "eight named cases",
+        "invalid outcome rejection preserves report and baseline",
+        "suite and outcome filters",
+        "graph controls",
+        "mobile layouts without horizontal overflow",
+        "no uncaught page errors"
+      ]
+    },
+    "http_html_normalization": "Removed only the known Cloudflare-injected analytics script before byte comparison; at most one injection per page.",
+    "deployed_reference_examples_unchanged": true
+  },
+  "scope": {
+    "static_site": true,
+    "original_python_runners_included": false,
+    "fresh_rust_qualification_run": false,
+    "chain_activation": false
+  }
+}
